@@ -1,0 +1,258 @@
+<?xml version="1.0" encoding="utf-8"?>
+<templates xml:space="preserve">
+
+<t t-name="smart_reorder.Dashboard">
+<div class="o_sra_dashboard">
+
+    <!-- ── TOP BAR ── -->
+    <div class="sra_topbar">
+        <div class="sra_topbar_left">
+            <h2>📦 Smart Reorder Advisor</h2>
+            <span class="sra_subtitle" t-if="state.lastAnalysisDate">
+                Last analysis: <strong><t t-esc="state.lastAnalysisDate"/></strong>
+            </span>
+            <span class="sra_subtitle" t-else="">No analysis run yet</span>
+        </div>
+        <div class="sra_topbar_right">
+            <select class="sra_select" t-on-change="onWarehouseChange">
+                <option value="">All Warehouses / Branches</option>
+                <t t-foreach="state.warehouses" t-as="wh" t-key="wh.id">
+                    <option t-att-value="wh.id">
+                        <t t-esc="wh.name"/> (<t t-esc="wh.company_id[1]"/>)
+                    </option>
+                </t>
+            </select>
+            <button class="btn btn-primary sra_btn_run" t-on-click="openRunWizard">
+                ⚙️ Run Analysis
+            </button>
+        </div>
+    </div>
+
+    <t t-if="state.loading">
+        <div class="sra_loading">
+            <div class="spinner-border text-primary"/>
+            <p>Loading dashboard...</p>
+        </div>
+    </t>
+
+    <t t-elif="state.error">
+        <div class="alert alert-danger m-3"><t t-esc="state.error"/></div>
+    </t>
+
+    <t t-else="">
+
+        <!-- ── SECTION 1: URGENCY KPI CARDS ── -->
+        <div class="sra_section_label">⚡ Urgency Overview</div>
+        <div class="sra_kpi_row">
+            <div class="sra_kpi sra_kpi_critical" t-on-click="openCritical">
+                <div class="sra_kpi_icon">🔴</div>
+                <div class="sra_kpi_value"><t t-esc="state.critical"/></div>
+                <div class="sra_kpi_label">Critical<br/><small>Negative Stock</small></div>
+            </div>
+            <div class="sra_kpi sra_kpi_urgent" t-on-click="openUrgent">
+                <div class="sra_kpi_icon">🟠</div>
+                <div class="sra_kpi_value"><t t-esc="state.urgent"/></div>
+                <div class="sra_kpi_label">Urgent<br/><small>Below Lead Time</small></div>
+            </div>
+            <div class="sra_kpi sra_kpi_normal" t-on-click="openReorder">
+                <div class="sra_kpi_icon">🟡</div>
+                <div class="sra_kpi_value"><t t-esc="state.normal"/></div>
+                <div class="sra_kpi_label">Normal<br/><small>Reorder Suggested</small></div>
+            </div>
+            <div class="sra_kpi sra_kpi_dead" t-on-click="openDead">
+                <div class="sra_kpi_icon">💀</div>
+                <div class="sra_kpi_value"><t t-esc="state.dead"/></div>
+                <div class="sra_kpi_label">Dead Stock<br/><small>No Movement</small></div>
+            </div>
+            <div class="sra_kpi sra_kpi_ok">
+                <div class="sra_kpi_icon">🟢</div>
+                <div class="sra_kpi_value"><t t-esc="state.ok"/></div>
+                <div class="sra_kpi_label">OK<br/><small>Sufficient Stock</small></div>
+            </div>
+        </div>
+
+        <!-- ── SECTION 2: PHASE 1 VALUE & BUDGET CARDS ── -->
+        <div class="sra_section_label">💰 Reorder Value &amp; Budget</div>
+        <div class="sra_value_row">
+            <div class="sra_value_card" t-on-click="openReorder">
+                <div class="sra_value_label">Total Reorder Value</div>
+                <div class="sra_value_amount sra_red">
+                    <t t-esc="formatCurrency(state.totalReorderValue)"/>
+                </div>
+                <div class="sra_value_sub">All items needing reorder</div>
+            </div>
+            <div class="sra_value_card" t-on-click="openBudget">
+                <div class="sra_value_label">Within Budget (<t t-esc="state.budgetCount"/> items)</div>
+                <div class="sra_value_amount sra_green">
+                    <t t-esc="formatCurrency(state.withinBudgetValue)"/>
+                </div>
+                <div class="sra_value_sub">Priority items within cap</div>
+            </div>
+            <div class="sra_value_card" t-on-click="openDead">
+                <div class="sra_value_label">Dead Stock Count</div>
+                <div class="sra_value_amount sra_grey">
+                    <t t-esc="state.deadStockCount"/>
+                </div>
+                <div class="sra_value_sub">Products with zero movement</div>
+            </div>
+        </div>
+
+        <!-- ── SECTION 3: ABC BAR ── -->
+        <div class="sra_card">
+            <div class="sra_card_title">🔤 ABC Classification (Monthly Demand)</div>
+            <div class="sra_abc_bar">
+                <div class="sra_abc_a" t-attf-style="width:#{abcAPercent}%">
+                    <t t-if="abcAPercent > 4">A: <t t-esc="state.abc_a"/></t>
+                </div>
+                <div class="sra_abc_b" t-attf-style="width:#{abcBPercent}%">
+                    <t t-if="abcBPercent > 4">B: <t t-esc="state.abc_b"/></t>
+                </div>
+                <div class="sra_abc_c" t-attf-style="width:#{abcCPercent}%">
+                    <t t-if="abcCPercent > 4">C: <t t-esc="state.abc_c"/></t>
+                </div>
+            </div>
+            <div class="sra_abc_legend">
+                <span class="leg_a">■ A Fast (<t t-esc="state.abc_a"/>)</span>
+                <span class="leg_b">■ B Medium (<t t-esc="state.abc_b"/>)</span>
+                <span class="leg_c">■ C Slow/Dead (<t t-esc="state.abc_c"/>)</span>
+            </div>
+        </div>
+
+        <!-- ── SECTION 4: PHASE 2 TREND ── -->
+        <div class="sra_section_label">📈 Demand Trend (vs Previous Period)</div>
+        <div class="sra_trend_row">
+            <div class="sra_trend_card sra_trend_up" t-on-click="openRising">
+                <div class="sra_trend_icon">↑</div>
+                <div class="sra_trend_val"><t t-esc="state.trendUp"/></div>
+                <div class="sra_trend_lbl">Rising Demand</div>
+            </div>
+            <div class="sra_trend_card sra_trend_stable">
+                <div class="sra_trend_icon">→</div>
+                <div class="sra_trend_val"><t t-esc="state.trendStable"/></div>
+                <div class="sra_trend_lbl">Stable Demand</div>
+            </div>
+            <div class="sra_trend_card sra_trend_down" t-on-click="openFalling">
+                <div class="sra_trend_icon">↓</div>
+                <div class="sra_trend_val"><t t-esc="state.trendDown"/></div>
+                <div class="sra_trend_lbl">Falling Demand</div>
+            </div>
+        </div>
+
+        <!-- ── SECTION 5: DETAIL TABLES ── -->
+        <div class="sra_tables_grid">
+
+            <!-- Critical items -->
+            <div class="sra_table_card">
+                <div class="sra_table_title sra_red">🔴 Critical — Negative Stock</div>
+                <t t-if="state.topCritical.length === 0">
+                    <p class="sra_empty">No critical items 🎉</p>
+                </t>
+                <t t-else="">
+                    <table class="sra_tbl">
+                        <thead><tr>
+                            <th>Part</th><th>Product</th><th>On Hand</th>
+                            <th>Reorder</th><th>Value</th>
+                        </tr></thead>
+                        <tbody>
+                            <t t-foreach="state.topCritical" t-as="r" t-key="r.id">
+                                <tr>
+                                    <td><t t-esc="r.default_code || '—'"/></td>
+                                    <td><t t-esc="r.product_id[1]"/></td>
+                                    <td class="sra_neg"><t t-esc="r.qty_on_hand.toFixed(0)"/></td>
+                                    <td class="sra_bold"><t t-esc="r.suggested_reorder_qty.toFixed(0)"/></td>
+                                    <td><t t-esc="formatCurrency(r.reorder_value)"/></td>
+                                </tr>
+                            </t>
+                        </tbody>
+                    </table>
+                </t>
+            </div>
+
+            <!-- Urgent items -->
+            <div class="sra_table_card">
+                <div class="sra_table_title sra_orange">🟠 Urgent — Stock Below Lead Time</div>
+                <t t-if="state.topUrgent.length === 0">
+                    <p class="sra_empty">No urgent items ✅</p>
+                </t>
+                <t t-else="">
+                    <table class="sra_tbl">
+                        <thead><tr>
+                            <th>Part</th><th>Product</th><th>Mo. Left</th>
+                            <th>Avg/Mo</th><th>Reorder</th>
+                        </tr></thead>
+                        <tbody>
+                            <t t-foreach="state.topUrgent" t-as="r" t-key="r.id">
+                                <tr>
+                                    <td><t t-esc="r.default_code || '—'"/></td>
+                                    <td><t t-esc="r.product_id[1]"/></td>
+                                    <td class="sra_warn"><t t-esc="formatMonths(r.months_of_stock)"/></td>
+                                    <td><t t-esc="r.avg_monthly_demand.toFixed(1)"/></td>
+                                    <td class="sra_bold"><t t-esc="r.suggested_reorder_qty.toFixed(0)"/></td>
+                                </tr>
+                            </t>
+                        </tbody>
+                    </table>
+                </t>
+            </div>
+
+            <!-- Phase 1: Dead stock -->
+            <div class="sra_table_card">
+                <div class="sra_table_title sra_grey">💀 Dead Stock — No Movement</div>
+                <t t-if="state.topDead.length === 0">
+                    <p class="sra_empty">No dead stock found 👍</p>
+                </t>
+                <t t-else="">
+                    <table class="sra_tbl">
+                        <thead><tr>
+                            <th>Part</th><th>Product</th><th>On Hand</th>
+                            <th>Mo. No Sale</th><th>Last Sale</th>
+                        </tr></thead>
+                        <tbody>
+                            <t t-foreach="state.topDead" t-as="r" t-key="r.id">
+                                <tr>
+                                    <td><t t-esc="r.default_code || '—'"/></td>
+                                    <td><t t-esc="r.product_id[1]"/></td>
+                                    <td><t t-esc="r.qty_on_hand.toFixed(0)"/></td>
+                                    <td class="sra_grey_txt"><t t-esc="r.months_since_last_sale"/> mo</td>
+                                    <td class="sra_grey_txt"><t t-esc="r.last_sale_date || 'Never'"/></td>
+                                </tr>
+                            </t>
+                        </tbody>
+                    </table>
+                </t>
+            </div>
+
+            <!-- Phase 2: Rising demand -->
+            <div class="sra_table_card">
+                <div class="sra_table_title sra_green">↑ Top Rising Demand</div>
+                <t t-if="state.topRising.length === 0">
+                    <p class="sra_empty">No rising products</p>
+                </t>
+                <t t-else="">
+                    <table class="sra_tbl">
+                        <thead><tr>
+                            <th>Part</th><th>Product</th><th>Avg/Mo</th>
+                            <th>Trend</th><th>Value</th>
+                        </tr></thead>
+                        <tbody>
+                            <t t-foreach="state.topRising" t-as="r" t-key="r.id">
+                                <tr>
+                                    <td><t t-esc="r.default_code || '—'"/></td>
+                                    <td><t t-esc="r.product_id[1]"/></td>
+                                    <td><t t-esc="r.avg_monthly_demand.toFixed(1)"/></td>
+                                    <td class="sra_green_txt">↑ <t t-esc="r.trend_pct.toFixed(0)"/>%</td>
+                                    <td><t t-esc="formatCurrency(r.reorder_value)"/></td>
+                                </tr>
+                            </t>
+                        </tbody>
+                    </table>
+                </t>
+            </div>
+
+        </div>
+
+    </t>
+</div>
+</t>
+
+</templates>

@@ -1,0 +1,115 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+
+    <record id="view_smart_reorder_config_form" model="ir.ui.view">
+        <field name="name">smart.reorder.config.form</field>
+        <field name="model">smart.reorder.config</field>
+        <field name="arch" type="xml">
+            <form string="Reorder Advisor Configuration">
+                <sheet>
+                    <div class="oe_title">
+                        <h1><field name="company_id" readonly="1"/></h1>
+                    </div>
+                    <field name="currency_id" invisible="1"/>
+
+                    <div class="row">
+                        <div class="col-md-6">
+                            <group string="📊 Phase 1 — Analysis Settings (Monthly)">
+                                <field name="analysis_period" widget="radio"/>
+                                <field name="safety_buffer_months"/>
+                                <field name="default_lead_time_months"/>
+                            </group>
+                        </div>
+                        <div class="col-md-6" style="margin-top: 1.5rem;">
+                            <div class="alert alert-info" role="alert" style="margin: 0;">
+                                <strong>Monthly demand explained:</strong><br/>
+                                If a part sold 18 units over 6 months → 3 units/month avg.<br/>
+                                Lead time 1.5 months + 1 month buffer = 2.5 months demand needed.<br/>
+                                2.5 × 3 = <strong>7.5 units → rounded up to MOQ</strong>
+                            </div>
+                        </div>
+                    </div>
+
+                    <group string="📦 Phase 1 — Dead Stock &amp; Budget">
+                        <group>
+                            <field name="flag_dead_stock"/>
+                            <field name="dead_stock_months"
+                                   invisible="not flag_dead_stock"/>
+                        </group>
+                        <group>
+                            <field name="budget_cap"/>
+                        </group>
+                    </group>
+
+                    <div class="row">
+                        <div class="col-md-6">
+                            <group string="🔤 ABC Thresholds (Monthly Demand)">
+                                <field name="abc_a_threshold"/>
+                                <field name="abc_b_threshold"/>
+                            </group>
+                        </div>
+                        <div class="col-md-6" style="margin-top: 1.5rem;">
+                            <div class="alert alert-warning" role="alert" style="margin: 0;">
+                                A ≥ <field name="abc_a_threshold" nolabel="1" readonly="1"/> units/month → Fast Mover<br/>
+                                B ≥ <field name="abc_b_threshold" nolabel="1" readonly="1"/> units/month → Medium<br/>
+                                Below B → C (Slow / Dead)
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="row">
+                        <div class="col-md-6">
+                            <group string="📈 Phase 2 — Demand Trend Settings">
+                                <field name="trend_comparison_months"/>
+                                <field name="send_email_report"/>
+                                <field name="email_subject_prefix"
+                                       invisible="not send_email_report"/>
+                            </group>
+                        </div>
+                        <div class="col-md-6">
+                            <group string="🔔 Notification Settings">
+                                <field name="notify_user_ids" widget="many2many_tags"/>
+                                <field name="critical_notify_only"/>
+                            </group>
+                        </div>
+                    </div>
+
+                    <group string="⚙️ Phase 3 — Advanced Features">
+                        <group>
+                            <field name="allow_draft_po"/>
+                            <field name="default_vendor_id"
+                                   invisible="not allow_draft_po"/>
+                            <field name="auto_flag_on_negative"/>
+                        </group>
+                        <group>
+                            <field name="track_vendor_performance"/>
+                        </group>
+                    </group>
+                </sheet>
+            </form>
+        </field>
+    </record>
+
+    <record id="view_smart_reorder_config_list" model="ir.ui.view">
+        <field name="name">smart.reorder.config.tree</field>
+        <field name="model">smart.reorder.config</field>
+        <field name="arch" type="xml">
+            <tree string="Reorder Configurations">
+                <field name="company_id"/>
+                <field name="analysis_period"/>
+                <field name="default_lead_time_months"/>
+                <field name="safety_buffer_months"/>
+                <field name="budget_cap"/>
+                <field name="send_email_report"/>
+                <field name="allow_draft_po"/>
+            </tree>
+        </field>
+    </record>
+
+    <record id="action_smart_reorder_config" model="ir.actions.act_window">
+        <field name="name">Reorder Configuration</field>
+        <field name="res_model">smart.reorder.config</field>
+        <field name="view_mode">tree,form</field>
+    </record>
+
+</odoo>

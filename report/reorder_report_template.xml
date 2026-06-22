@@ -1,0 +1,382 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+
+    <!--
+    ╔══════════════════════════════════════════════════════════════╗
+    ║  SMART REORDER ADVISOR — PDF REPORT  (v2.1 fixed)           ║
+    ║                                                              ║
+    ║  FIXES IN THIS VERSION:                                      ║
+    ║  FIX 1 — analysis_period_days  → analysis_months            ║
+    ║  FIX 2 — avg_daily_demand      → avg_monthly_demand         ║
+    ║  FIX 3 — days_of_stock         → months_of_stock            ║
+    ║  FIX 4 — lead_time_days        → lead_time_months           ║
+    ║  FIX 5 — safety_buffer_days    → safety_buffer_months       ║
+    ║  FIX 6 — fields_get() in loop  → pre-declared t-set dict    ║
+    ║  FIX 7 — 'dead' urgency added  → KeyError prevented         ║
+    ║  FIX 8 — all labels updated    → "Month" not "Day"          ║
+    ╚══════════════════════════════════════════════════════════════╝
+    -->
+
+    <!-- ══════════════════════════════════════════════════════════
+         DETAIL REPORT — one page per product
+    ══════════════════════════════════════════════════════════ -->
+
+    <template id="report_reorder_suggestions_document">
+        <t t-call="web.html_container">
+            <t t-foreach="docs" t-as="doc">
+                <div class="page" style="font-family: Arial, sans-serif; font-size: 11px;">
+
+                    <!-- FIX 6: Pre-declare label dicts ONCE per doc, not via fields_get() per record -->
+                    <t t-set="abc_labels" t-value="{'A': 'A — Fast Mover', 'B': 'B — Medium Mover', 'C': 'C — Slow / Dead'}"/>
+                    <t t-set="urgency_labels" t-value="{
+                        'critical': '🔴 Critical — Negative Stock',
+                        'urgent':   '🟠 Urgent — Below Lead Time',
+                        'normal':   '🟡 Normal — Reorder Recommended',
+                        'dead':     '💀 Dead Stock — No Movement',
+                        'ok':       '🟢 OK — Sufficient Stock'
+                    }"/>
+
+                    <!-- ── HEADER ── -->
+                    <div style="border-bottom: 2px solid #2c3e50; padding-bottom: 10px; margin-bottom: 16px;">
+                        <table width="100%">
+                            <tr>
+                                <td>
+                                    <h2 style="color: #2c3e50; margin: 0;">📦 Smart Reorder Suggestion</h2>
+                                    <p style="margin: 4px 0; color: #666;">
+                                        Company: <strong><t t-esc="doc.company_id.name"/></strong> |
+                                        Warehouse: <strong><t t-esc="doc.warehouse_id.name"/></strong>
+                                    </p>
+                                </td>
+                                <td align="right">
+                                    <p style="margin: 0; color: #666;">
+                                        Analysis Date: <t t-esc="doc.analysis_date"/><br/>
+                                        <!-- FIX 1: analysis_period_days → analysis_months -->
+                                        Period: <t t-esc="doc.analysis_months"/> months<br/>
+                                        (<t t-esc="doc.date_from"/> → <t t-esc="doc.date_to"/>)
+                                    </p>
+                                </td>
+                            </tr>
+                        </table>
+                    </div>
+
+                    <!-- ── URGENCY BANNER ── -->
+                    <t t-if="doc.urgency == 'critical'">
+                        <div style="background:#e74c3c; color:white; padding:6px 12px;
+                                    border-radius:4px; margin-bottom:12px; font-weight:bold;">
+                            🔴 CRITICAL — NEGATIVE STOCK DETECTED
+                        </div>
+                    </t>
+                    <t t-elif="doc.urgency == 'urgent'">
+                        <div style="background:#e67e22; color:white; padding:6px 12px;
+                                    border-radius:4px; margin-bottom:12px; font-weight:bold;">
+                            🟠 URGENT — Stock Below Lead Time Demand
+                        </div>
+                    </t>
+                    <t t-elif="doc.urgency == 'dead'">
+                        <!-- FIX 7: dead urgency now handled (was missing) -->
+                        <div style="background:#7f8c8d; color:white; padding:6px 12px;
+                                    border-radius:4px; margin-bottom:12px; font-weight:bold;">
+                            💀 DEAD STOCK — No Sales Movement Detected
+                        </div>
+                    </t>
+
+                    <!-- ── PRODUCT INFO ── -->
+                    <table width="100%" style="margin-bottom:16px;">
+                        <tr>
+                            <td width="60%">
+                                <strong>Product:</strong> <t t-esc="doc.product_id.display_name"/><br/>
+                                <strong>Part Number:</strong> <t t-esc="doc.default_code or 'N/A'"/><br/>
+                                <strong>Category:</strong> <t t-esc="doc.product_categ_id.name or '—'"/>
+                            </td>
+                            <td width="40%" align="right">
+                                <!-- FIX 6: Use pre-declared dict instead of fields_get() per record -->
+                                <strong>ABC Class:</strong>
+                                <t t-esc="abc_labels.get(doc.abc_class, doc.abc_class or '—')"/>
+                                <br/>
+                                <strong>Demand Trend:</strong>
+                                <t t-esc="doc.demand_trend or '—'"/>
+                                (<t t-esc="'%+.1f' % doc.trend_pct"/>%)
+                            </td>
+                        </tr>
+                    </table>
+
+                    <!-- ── STOCK POSITION TABLE ── -->
+                    <h4 style="color:#2c3e50; border-bottom:1px solid #ddd; padding-bottom:4px;">
+                        Current Stock Position
+                    </h4>
+                    <table width="100%" border="0" cellspacing="0" cellpadding="6"
+                           style="margin-bottom:16px;">
+                        <thead>
+                            <tr style="background:#2c3e50; color:white;">
+                                <th align="left">On Hand</th>
+                                <th align="left">Incoming (PO)</th>
+                                <th align="left">Net Available</th>
+                                <!-- FIX 3: "Days of Stock" → "Months of Stock" -->
+                                <th align="left">Months of Stock</th>
+                                <!-- FIX 4: "Lead Time (Days)" → "Lead Time (Months)" -->
+                                <th align="left">Lead Time (Months)</th>
+                                <th align="left">MOQ</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr style="background:#f9f9f9;">
+                                <td t-attf-style="color: #{'e74c3c' if doc.qty_on_hand &lt; 0 else '333'}; font-weight: #{'bold' if doc.qty_on_hand &lt; 0 else 'normal'};">
+                                    <t t-esc="'%.2f' % doc.qty_on_hand"/>
+                                </td>
+                                <td><t t-esc="'%.2f' % doc.qty_incoming"/></td>
+                                <td><t t-esc="'%.2f' % doc.qty_available"/></td>
+                                <!-- FIX 3: doc.days_of_stock → doc.months_of_stock -->
+                                <td t-attf-style="color: #{'e74c3c' if doc.months_of_stock &lt; 1 else ('e67e22' if doc.months_of_stock &lt; 2 else '333')};">
+                                    <t t-esc="'%.1f' % doc.months_of_stock"/>
+                                    <t t-if="doc.months_of_stock &lt; 1"> ⚠️</t>
+                                </td>
+                                <!-- FIX 4: doc.lead_time_days → doc.lead_time_months -->
+                                <td><t t-esc="'%.1f' % doc.lead_time_months"/></td>
+                                <td><t t-esc="'%.0f' % doc.moq"/></td>
+                            </tr>
+                        </tbody>
+                    </table>
+
+                    <!-- ── DEMAND ANALYSIS TABLE ── -->
+                    <h4 style="color:#2c3e50; border-bottom:1px solid #ddd; padding-bottom:4px;">
+                        <!-- FIX 1 + FIX 8: "Day Window" → "Month Window" -->
+                        Monthly Demand Analysis (<t t-esc="doc.analysis_months"/> Month Window)
+                    </h4>
+                    <table width="100%" border="0" cellspacing="0" cellpadding="6"
+                           style="margin-bottom:16px;">
+                        <thead>
+                            <tr style="background:#2c3e50; color:white;">
+                                <th align="left">Total Sold (Period)</th>
+                                <!-- FIX 2 + FIX 8: "Avg Daily Demand" → "Avg Monthly Demand" -->
+                                <th align="left">Avg Monthly Demand</th>
+                                <!-- FIX 5 + FIX 8: "Safety Buffer (Days)" → "Safety Buffer (Months)" -->
+                                <th align="left">Safety Buffer (Months)</th>
+                                <th align="left">Dead Stock?</th>
+                                <th align="left">Last Sale</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr style="background:#f9f9f9;">
+                                <td><t t-esc="'%.2f' % doc.total_qty_sold"/> units</td>
+                                <!-- FIX 2: doc.avg_daily_demand → doc.avg_monthly_demand -->
+                                <td><t t-esc="'%.2f' % doc.avg_monthly_demand"/> units/month</td>
+                                <!-- FIX 5: doc.safety_buffer_days → doc.safety_buffer_months -->
+                                <td><t t-esc="'%.1f' % doc.safety_buffer_months"/> months</td>
+                                <td>
+                                    <t t-if="doc.is_dead_stock">
+                                        💀 Yes (<t t-esc="doc.months_since_last_sale"/> months)
+                                    </t>
+                                    <t t-else="">No</t>
+                                </td>
+                                <td><t t-esc="doc.last_sale_date or 'Never'"/></td>
+                            </tr>
+                        </tbody>
+                    </table>
+
+                    <!-- ── RECOMMENDATION BOX ── -->
+                    <t t-if="doc.reorder_needed">
+                        <div style="background:#eafaf1; border:2px solid #27ae60; border-radius:6px;
+                                    padding:12px; margin-bottom:16px; text-align:center;">
+                            <p style="margin:0; font-size:13px; color:#555;">SUGGESTED REORDER QUANTITY</p>
+                            <p style="margin:4px 0; font-size:26px; font-weight:bold; color:#27ae60;">
+                                <t t-esc="'%.0f' % doc.suggested_reorder_qty"/> units
+                            </p>
+                            <p style="margin:4px 0; color:#666; font-size:11px;">
+                                Raw qty: <t t-esc="'%.2f' % doc.raw_reorder_qty"/> →
+                                rounded up to MOQ of <t t-esc="'%.0f' % doc.moq"/>
+                            </p>
+                            <p style="margin:6px 0 0 0; font-size:13px; color:#2c3e50; font-weight:bold;">
+                                💰 Estimated Cost:
+                                <t t-esc="doc.currency_id.symbol or ''"/>
+                                <t t-esc="'%.2f' % doc.reorder_value"/>
+                            </p>
+                        </div>
+                    </t>
+                    <t t-else="">
+                        <div style="background:#eafaf1; border:2px solid #27ae60; border-radius:6px;
+                                    padding:12px; margin-bottom:16px; text-align:center;">
+                            <p style="margin:0; font-size:13px; color:#27ae60; font-weight:bold;">
+                                🟢 Stock is sufficient — no reorder needed at this time.
+                            </p>
+                        </div>
+                    </t>
+
+                    <!-- ── VENDOR INFO ── -->
+                    <t t-if="doc.vendor_id">
+                        <h4 style="color:#2c3e50; border-bottom:1px solid #ddd; padding-bottom:4px;">
+                            Vendor
+                        </h4>
+                        <p style="margin:0 0 12px 0;">
+                            <strong><t t-esc="doc.vendor_id.name"/></strong> |
+                            Stated lead: <t t-esc="doc.vendor_stated_lead_days"/> days
+                            <t t-if="doc.vendor_performance_note">
+                                | <t t-esc="doc.vendor_performance_note"/>
+                            </t>
+                        </p>
+                    </t>
+
+                    <!-- ── CALCULATION BREAKDOWN ── -->
+                    <h4 style="color:#2c3e50; border-bottom:1px solid #ddd; padding-bottom:4px;">
+                        Calculation Breakdown
+                    </h4>
+                    <pre style="background:#f5f5f5; padding:10px; border-radius:4px;
+                                font-size:9px; white-space:pre-wrap; font-family:monospace;">
+<t t-esc="doc.notes"/>
+                    </pre>
+
+                </div>
+            </t>
+        </t>
+    </template>
+
+    <!-- ══════════════════════════════════════════════════════════
+         SUMMARY REPORT — all products grouped by warehouse
+    ══════════════════════════════════════════════════════════ -->
+
+    <template id="report_reorder_summary_document">
+        <t t-call="web.html_container">
+
+            <!-- FIX 6 + FIX 7: Pre-declare all label dicts ONCE outside loops -->
+            <t t-set="urgency_colors" t-value="{
+                'critical': '#fdecea',
+                'urgent':   '#fef3e2',
+                'normal':   '#e8f4fd',
+                'dead':     '#f0f0f0',
+                'ok':       '#f9f9f9'
+            }"/>
+            <t t-set="urgency_labels" t-value="{
+                'critical': '🔴 Critical',
+                'urgent':   '🟠 Urgent',
+                'normal':   '🟡 Normal',
+                'dead':     '💀 Dead Stock',
+                'ok':       '🟢 OK'
+            }"/>
+
+            <t t-set="warehouses" t-value="docs.mapped('warehouse_id')"/>
+            <t t-foreach="warehouses" t-as="warehouse">
+                <div class="page">
+
+                    <!-- ── REPORT HEADER ── -->
+                    <div style="border-bottom:2px solid #2c3e50; padding-bottom:10px; margin-bottom:16px;">
+                        <h2 style="color:#2c3e50; margin:0;">📦 Reorder Summary Report</h2>
+                        <p style="color:#666;">
+                            Warehouse: <strong><t t-esc="warehouse.name"/></strong> |
+                            Company: <strong><t t-esc="warehouse.company_id.name"/></strong> |
+                            Date: <t t-esc="context_today()"/>
+                        </p>
+                    </div>
+
+                    <!-- ── KPI SUMMARY BOXES ── -->
+                    <t t-set="wh_docs"       t-value="docs.filtered(lambda d: d.warehouse_id.id == warehouse.id)"/>
+                    <t t-set="critical_count" t-value="len(wh_docs.filtered(lambda d: d.urgency == 'critical'))"/>
+                    <t t-set="urgent_count"   t-value="len(wh_docs.filtered(lambda d: d.urgency == 'urgent'))"/>
+                    <t t-set="dead_count"     t-value="len(wh_docs.filtered(lambda d: d.is_dead_stock))"/>
+                    <t t-set="reorder_count"  t-value="len(wh_docs.filtered(lambda d: d.reorder_needed))"/>
+                    <t t-set="total_value"    t-value="sum(wh_docs.filtered(lambda d: d.reorder_needed).mapped('reorder_value'))"/>
+                    <t t-set="currency_sym"   t-value="wh_docs[0].currency_id.symbol if wh_docs else ''"/>
+
+                    <table width="100%" style="margin-bottom:16px; text-align:center;">
+                        <tr>
+                            <td style="background:#e74c3c; color:white; padding:10px; border-radius:4px; width:18%;">
+                                <strong style="font-size:20px;"><t t-esc="critical_count"/></strong><br/>Critical
+                            </td>
+                            <td style="width:2%;"/>
+                            <td style="background:#e67e22; color:white; padding:10px; border-radius:4px; width:18%;">
+                                <strong style="font-size:20px;"><t t-esc="urgent_count"/></strong><br/>Urgent
+                            </td>
+                            <td style="width:2%;"/>
+                            <td style="background:#7f8c8d; color:white; padding:10px; border-radius:4px; width:18%;">
+                                <strong style="font-size:20px;"><t t-esc="dead_count"/></strong><br/>Dead Stock
+                            </td>
+                            <td style="width:2%;"/>
+                            <td style="background:#3498db; color:white; padding:10px; border-radius:4px; width:18%;">
+                                <strong style="font-size:20px;"><t t-esc="reorder_count"/></strong><br/>Need Reorder
+                            </td>
+                            <td style="width:2%;"/>
+                            <td style="background:#2c3e50; color:white; padding:10px; border-radius:4px; width:18%;">
+                                <strong style="font-size:14px;">
+                                    <t t-esc="currency_sym"/>
+                                    <t t-esc="'%.0f' % total_value"/>
+                                </strong><br/>Total Value
+                            </td>
+                        </tr>
+                    </table>
+
+                    <!-- ── PRODUCT TABLE ── -->
+                    <table width="100%" border="1" cellspacing="0" cellpadding="5"
+                           style="border-collapse:collapse; font-size:9px;">
+                        <thead>
+                            <tr style="background:#2c3e50; color:white;">
+                                <th align="left">Status</th>
+                                <th align="left">ABC</th>
+                                <th align="left">Part No.</th>
+                                <th align="left">Product</th>
+                                <th align="right">On Hand</th>
+                                <th align="right">Net Avail.</th>
+                                <!-- FIX 2 + FIX 8: "Avg/Day" → "Avg/Month" -->
+                                <th align="right">Avg/Month</th>
+                                <!-- FIX 3 + FIX 8: "Months Left" (was "Days Left") -->
+                                <th align="right">Mo. Left</th>
+                                <!-- FIX 4 + FIX 8: "Lead Mo." (was "Lead Days") -->
+                                <th align="right">Lead Mo.</th>
+                                <th align="right">MOQ</th>
+                                <th align="right">Suggest Reorder</th>
+                                <th align="right">Value</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <t t-foreach="wh_docs.sorted(lambda d: d.urgency_rank)" t-as="item">
+                                <!-- FIX 7: urgency_colors dict now includes 'dead' key -->
+                                <tr t-attf-style="background: #{urgency_colors.get(item.urgency, '#f9f9f9')};">
+                                    <td>
+                                        <!-- FIX 7: urgency_labels dict now includes 'dead' key -->
+                                        <t t-esc="urgency_labels.get(item.urgency, item.urgency)"/>
+                                    </td>
+                                    <td align="center"><t t-esc="item.abc_class or '—'"/></td>
+                                    <td><t t-esc="item.default_code or ''"/></td>
+                                    <td><t t-esc="item.product_id.display_name"/></td>
+                                    <td align="right"
+                                        t-attf-style="color: #{'e74c3c' if item.qty_on_hand &lt; 0 else '333'}; font-weight: #{'bold' if item.qty_on_hand &lt; 0 else 'normal'};">
+                                        <t t-esc="'%.0f' % item.qty_on_hand"/>
+                                    </td>
+                                    <td align="right"><t t-esc="'%.0f' % item.qty_available"/></td>
+                                    <!-- FIX 2: item.avg_daily_demand → item.avg_monthly_demand -->
+                                    <td align="right"><t t-esc="'%.2f' % item.avg_monthly_demand"/></td>
+                                    <!-- FIX 3: item.days_of_stock → item.months_of_stock -->
+                                    <td align="right"
+                                        t-attf-style="color: #{'e74c3c' if item.months_of_stock &lt; 1 else ('e67e22' if item.months_of_stock &lt; 2 else '333')};">
+                                        <t t-esc="'%.1f' % item.months_of_stock"/>
+                                    </td>
+                                    <!-- FIX 4: item.lead_time_days → item.lead_time_months -->
+                                    <td align="right"><t t-esc="'%.1f' % item.lead_time_months"/></td>
+                                    <td align="right"><t t-esc="'%.0f' % item.moq"/></td>
+                                    <td align="right" style="font-weight:bold;">
+                                        <t t-if="item.reorder_needed">
+                                            <t t-esc="'%.0f' % item.suggested_reorder_qty"/>
+                                        </t>
+                                        <t t-else="">—</t>
+                                    </td>
+                                    <td align="right">
+                                        <t t-if="item.reorder_needed">
+                                            <t t-esc="'%.2f' % item.reorder_value"/>
+                                        </t>
+                                        <t t-else="">—</t>
+                                    </td>
+                                </tr>
+                            </t>
+                        </tbody>
+                    </table>
+
+                    <!-- ── FOOTER ── -->
+                    <p style="margin-top:12px; font-size:9px; color:#aaa; text-align:right;">
+                        Generated by Smart Reorder Advisor |
+                        <t t-esc="context_today()"/> |
+                        Mo. = Months
+                    </p>
+
+                </div>
+            </t>
+        </t>
+    </template>
+
+</odoo>

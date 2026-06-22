@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+
+    <record id="view_generate_suggestions_wizard" model="ir.ui.view">
+        <field name="name">smart.reorder.wizard.form</field>
+        <field name="model">smart.reorder.wizard</field>
+        <field name="arch" type="xml">
+            <form string="Generate Reorder Analysis">
+                <sheet>
+                    <div class="oe_title">
+                        <h2>📊 Smart Reorder Analysis</h2>
+                        <p class="text-muted">
+                            This will analyse your sales history and calculate
+                            reorder suggestions based on demand velocity.
+                            No Min/Max values need to be set on products.
+                        </p>
+                    </div>
+
+                    <group string="Scope">
+                        <field name="scope" widget="radio"/>
+                        <field name="company_ids" widget="many2many_tags"
+                               invisible="scope != 'company'"
+                               required="scope == 'company'"/>
+                        <field name="warehouse_ids" widget="many2many_tags"
+                               invisible="scope != 'warehouse'"
+                               required="scope == 'warehouse'"/>
+                    </group>
+
+                    <group string="Options">
+                        <field name="include_zero_demand"/>
+                    </group>
+
+                    <div class="alert alert-info" role="alert">
+                        <strong>💡 Tip:</strong>
+                        Analysis settings (lookback period, safety buffer, lead time defaults)
+                        are configured per company under <em>Configuration → Company Settings</em>.
+                    </div>
+
+                </sheet>
+                <footer>
+                    <button name="action_generate"
+                            string="▶ Run Analysis"
+                            type="object"
+                            class="btn-primary"/>
+                    <button string="Cancel" class="btn-secondary" special="cancel"/>
+                </footer>
+            </form>
+        </field>
+    </record>
+
+    <record id="action_generate_suggestions_wizard" model="ir.actions.act_window">
+        <field name="name">Generate Reorder Analysis</field>
+        <field name="res_model">smart.reorder.wizard</field>
+        <field name="view_mode">form</field>
+        <field name="target">new</field>
+    </record>
+
+</odoo>

@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <data noupdate="1">
+
+        <!--
+        ╔══════════════════════════════════════════════════════════════╗
+        ║  SMART REORDER ADVISOR — SECURITY GROUPS                    ║
+        ║                                                              ║
+        ║  User:    Can VIEW suggestions and run reports (read-only)   ║
+        ║  Manager: Can run analysis, configure settings, send alerts  ║
+        ╚══════════════════════════════════════════════════════════════╝
+        -->
+
+        <!-- Module category -->
+        <record id="module_category_smart_reorder" model="ir.module.category">
+            <field name="name">Smart Reorder Advisor</field>
+            <field name="sequence">50</field>
+        </record>
+
+        <!-- User group: read-only access to suggestions and reports -->
+        <record id="group_smart_reorder_user" model="res.groups">
+            <field name="name">User</field>
+            <field name="category_id" ref="module_category_smart_reorder"/>
+            <field name="implied_ids" eval="[(4, ref('base.group_user'))]"/>
+        </record>
+
+        <!-- Manager group: full access including config and running analysis -->
+        <record id="group_smart_reorder_manager" model="res.groups">
+            <field name="name">Manager</field>
+            <field name="category_id" ref="module_category_smart_reorder"/>
+            <field name="implied_ids" eval="[(4, ref('group_smart_reorder_user'))]"/>
+            <field name="users" eval="[(4, ref('base.user_root')), (4, ref('base.user_admin'))]"/>
+        </record>
+
+        <!--
+        Record Rules: Multi-company isolation.
+        Users only see suggestions for their current company.
+        Admins/Managers can see all companies.
+        -->
+        <record id="rule_suggestion_company" model="ir.rule">
+            <field name="name">Smart Reorder: Company isolation</field>
+            <field name="model_id" ref="model_smart_reorder_suggestion"/>
+            <field name="groups" eval="[(4, ref('group_smart_reorder_user'))]"/>
+            <field name="domain_force">
+                [('company_id', 'in', company_ids)]
+            </field>
+            <field name="perm_read" eval="True"/>
+            <field name="perm_write" eval="False"/>
+            <field name="perm_create" eval="False"/>
+            <field name="perm_unlink" eval="False"/>
+        </record>
+
+        <record id="rule_config_company" model="ir.rule">
+            <field name="name">Smart Reorder Config: Company isolation</field>
+            <field name="model_id" ref="model_smart_reorder_config"/>
+            <field name="groups" eval="[(4, ref('group_smart_reorder_user'))]"/>
+            <field name="domain_force">
+                [('company_id', 'in', company_ids)]
+            </field>
+        </record>
+
+    </data>
+</odoo>

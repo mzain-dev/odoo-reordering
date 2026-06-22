@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="view_smart_reorder_po_wizard_form" model="ir.ui.view">
+        <field name="name">smart.reorder.po.wizard.form</field>
+        <field name="model">smart.reorder.po.wizard</field>
+        <field name="arch" type="xml">
+            <form string="Generate Consolidated Purchase Orders">
+                <p>
+                    Are you sure you want to generate consolidated Draft Purchase Orders for the selected suggestions?
+                    The suggestions will be grouped by Vendor and Company.
+                </p>
+                <footer>
+                    <button name="action_confirm_consolidation" string="Generate POs" type="object" class="btn-primary"/>
+                    <button string="Cancel" class="btn-secondary" special="cancel"/>
+                </footer>
+            </form>
+        </field>
+    </record>
+
+    <record id="action_smart_reorder_po_wizard" model="ir.actions.act_window">
+        <field name="name">Generate Consolidated POs</field>
+        <field name="res_model">smart.reorder.po.wizard</field>
+        <field name="view_mode">form</field>
+        <field name="target">new</field>
+        <field name="binding_model_id" ref="model_smart_reorder_suggestion"/>
+        <field name="binding_view_types">list</field>
+    </record>
+</odoo>

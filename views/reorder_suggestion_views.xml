@@ -1,0 +1,380 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+
+    <record id="view_smart_reorder_suggestion_list" model="ir.ui.view">
+        <field name="name">smart.reorder.suggestion.tree</field>
+        <field name="model">smart.reorder.suggestion</field>
+        <field name="arch" type="xml">
+            <tree string="Reorder Suggestions"
+                  create="false" edit="false" delete="false"
+                  decoration-danger="urgency == 'critical'"
+                  decoration-warning="urgency == 'urgent'"
+                  decoration-info="urgency == 'normal'"
+                  decoration-muted="urgency in ('ok','dead')">
+
+                <field name="budget_rank"      string="#" optional="show"/>
+                <field name="urgency"          widget="badge"
+                       decoration-danger="urgency == 'critical'"
+                       decoration-warning="urgency == 'urgent'"
+                       decoration-info="urgency == 'normal'"
+                       decoration-success="urgency == 'ok'"
+                       decoration-muted="urgency == 'dead'"/> <field name="abc_class"        widget="badge"
+                       decoration-danger="abc_class == 'A'"
+                       decoration-warning="abc_class == 'B'"
+                       decoration-muted="abc_class == 'C'"/>
+                <field name="demand_trend"     widget="badge"
+                       decoration-success="demand_trend == 'up'"
+                       decoration-danger="demand_trend == 'down'"
+                       decoration-muted="demand_trend in ('stable','new')"
+                       optional="show"/>
+
+                <field name="company_id"       groups="base.group_multi_company" optional="show"/>
+                <field name="warehouse_id"     optional="show"/>
+                <field name="default_code"     string="Part No."/>
+                <field name="product_id"/>
+                <field name="product_categ_id" optional="hide"/>
+
+                <field name="qty_on_hand"      string="On Hand"
+                       decoration-danger="qty_on_hand &lt; 0"/>
+                <field name="qty_incoming"     string="PO Incoming" optional="show"/>
+                <field name="qty_available"    string="Net Avail."/>
+                <field name="months_of_stock"  string="Months Left" digits="[16,1]"
+                       decoration-danger="months_of_stock &lt; 1"
+                       decoration-warning="months_of_stock &lt; 2"/>
+
+                <field name="avg_monthly_demand" string="Avg/Month" digits="[16,2]"/>
+                <field name="lead_time_months"   string="Lead (Mo)" digits="[16,1]" optional="show"/>
+                <field name="moq"                string="MOQ" optional="show"/>
+
+                <field name="raw_reorder_qty"        string="Raw Qty" optional="hide"/>
+                <field name="suggested_reorder_qty"  string="Suggest Reorder"
+                       decoration-bf="reorder_needed == True"/>
+
+                <field name="product_cost"     string="Unit Cost" optional="show"/>
+                <field name="reorder_value"    string="Reorder Value (OMR)"
+                       widget="monetary" options="{'currency_field': 'currency_id'}"
+                       decoration-bf="reorder_needed == True"/>
+
+                <field name="is_dead_stock"         string="Dead?" optional="show"/>
+                <field name="months_since_last_sale" string="Mo. No Sale" optional="show"/>
+
+                <field name="within_budget"    string="In Budget?" optional="show"/>
+
+                <field name="vendor_id"        string="Vendor" optional="hide"/>
+
+                <field name="transfer_source_warehouse_id" string="Transfer Source" optional="show"/>
+
+                <field name="reorder_needed"   invisible="1"/>
+                <field name="urgency_rank"     invisible="1"/>
+                <field name="currency_id"      invisible="1"/>
+                <field name="analysis_date"    optional="hide"/>
+
+            </tree>
+        </field>
+    </record>
+
+    <record id="view_smart_reorder_suggestion_form" model="ir.ui.view">
+        <field name="name">smart.reorder.suggestion.form</field>
+        <field name="model">smart.reorder.suggestion</field>
+        <field name="arch" type="xml">
+            <form string="Reorder Suggestion" create="false" edit="false">
+                <header>
+                    <button name="action_create_draft_po"
+                            string="📋 Create Draft PO"
+                            type="object"
+                            class="btn-secondary"
+                            invisible="not reorder_needed or not transfer_source_warehouse_id"/>
+                    <button name="action_create_draft_po"
+                            string="📋 Create Draft PO"
+                            type="object"
+                            class="btn-primary"
+                            invisible="not reorder_needed or transfer_source_warehouse_id"/>
+                    <button name="action_create_internal_transfer"
+                            string="🔄 Create Internal Transfer"
+                            type="object"
+                            class="btn-primary"
+                            invisible="not transfer_source_warehouse_id"/>
+                    <button name="action_refresh_vendor_performance"
+                            string="🚚 Refresh Vendor Data"
+                            type="object"
+                            class="btn-secondary"
+                            invisible="not vendor_id"/>
+                    <button name="action_open_product"
+                            string="🔍 View Product"
+                            type="object"
+                            class="btn-secondary"/>
+                    <button name="action_open_stock_moves"
+                            string="📦 Stock Moves"
+                            type="object"
+                            class="btn-secondary"/>
+                </header>
+
+                <sheet>
+                    <div class="oe_title">
+                        <div class="o_row" style="gap:8px; flex-wrap:wrap;">
+                            <field name="urgency" widget="badge"
+                                   decoration-danger="urgency == 'critical'"
+                                   decoration-warning="urgency == 'urgent'"
+                                   decoration-info="urgency == 'normal'"
+                                   decoration-success="urgency == 'ok'"/>
+                            <field name="abc_class" widget="badge"
+                                   decoration-danger="abc_class == 'A'"
+                                   decoration-warning="abc_class == 'B'"
+                                   decoration-muted="abc_class == 'C'"/>
+                            <field name="demand_trend" widget="badge"
+                                   decoration-success="demand_trend == 'up'"
+                                   decoration-danger="demand_trend == 'down'"
+                                   decoration-muted="demand_trend in ('stable','new')"/>
+                        </div>
+                        <h1><field name="product_id" readonly="1"/></h1>
+                        <h3>
+                            <field name="default_code" readonly="1"/> |
+                            <field name="warehouse_id" readonly="1"/> |
+                            <field name="company_id" readonly="1"
+                                   groups="base.group_multi_company"/>
+                        </h3>
+                    </div>
+
+                    <div class="alert alert-danger" role="alert"
+                         invisible="qty_on_hand >= 0">
+                        ⚠️ <strong>NEGATIVE STOCK!</strong>
+                        On hand = <field name="qty_on_hand" readonly="1"/> units.
+                        Reorder immediately and ensure receipts are booked correctly.
+                    </div>
+
+                    <div class="alert alert-warning" role="alert"
+                         invisible="not is_dead_stock">
+                        💀 <strong>DEAD STOCK.</strong>
+                        No sales for <field name="months_since_last_sale" readonly="1"/> months.
+                        Last sale: <field name="last_sale_date" readonly="1"/>.
+                        Consider liquidating or returning to vendor.
+                    </div>
+
+                    <div class="alert alert-info" role="alert"
+                         invisible="within_budget">
+                        💰 This item exceeds the configured weekly budget cap.
+                        It is ranked #<field name="budget_rank" readonly="1"/> in priority order.
+                    </div>
+
+                    <div class="alert alert-success" role="alert"
+                         invisible="not transfer_source_warehouse_id">
+                        🔄 <strong>TRANSFER RECOMMENDED!</strong>
+                        Warehouse <strong><field name="transfer_source_warehouse_id" readonly="1" options="{'no_open': True}"/></strong> has surplus stock of this item.
+                        You can issue an internal transfer instead of an external PO.
+                    </div>
+
+                    <div style="background:#eafaf1; border:2px solid #27ae60;
+                                border-radius:8px; padding:16px; margin-bottom:16px; display: block;"
+                         invisible="not reorder_needed">
+                        <div style="text-align:center;">
+                            <p style="margin:0; font-size:13px; color:#555;">SUGGESTED REORDER QTY</p>
+                            <div style="margin:4px 0; font-size:2.5rem; font-weight:700; color:#27ae60; display: flex; justify-content: center; align-items: baseline; gap: 8px;">
+                                <field name="suggested_reorder_qty" readonly="1" nolabel="1"
+                                       style="font-size:inherit; font-weight:inherit;"/>
+                                <span style="font-size: 1.5rem; font-weight: 500; color: #27ae60;">units</span>
+                            </div>
+                            <div style="margin:0; color:#666; font-size:12px; display: flex; justify-content: center; align-items: center; flex-wrap: wrap; gap: 4px;">
+                                <span>(Raw:</span>
+                                <field name="raw_reorder_qty" readonly="1" nolabel="1" class="d-inline-block fw-bold"/>
+                                <span>→ rounded up to MOQ of</span>
+                                <field name="moq" readonly="1" nolabel="1" class="d-inline-block fw-bold"/>
+                                <span>)</span>
+                            </div>
+                            <div style="margin:8px 0 0 0; font-size:1.1rem; color:#2c3e50; display: flex; justify-content: center; align-items: center; gap: 6px;">
+                                <span>💰 Estimated cost:</span>
+                                <field name="reorder_value" readonly="1" nolabel="1"
+                                       widget="monetary"
+                                       options="{'currency_field': 'currency_id'}"
+                                       class="fw-bold"/>
+                            </div>
+                            <field name="currency_id" invisible="1"/>
+                            <field name="reorder_needed" invisible="1"/>
+                        </div>
+                    </div>
+
+                    <notebook>
+
+                        <page string="📦 Stock &amp; Demand">
+                            <group string="Current Stock Position">
+                                <group>
+                                    <field name="qty_on_hand" readonly="1"/>
+                                    <field name="qty_incoming" readonly="1"/>
+                                    <field name="qty_available" readonly="1"/>
+                                    <field name="months_of_stock" readonly="1"/>
+                                    <field name="transfer_source_warehouse_id" readonly="1" invisible="not transfer_source_warehouse_id"/>
+                                </group>
+                                <group>
+                                    <field name="lead_time_months" readonly="1"/>
+                                    <field name="safety_buffer_months" readonly="1"/>
+                                    <field name="moq" readonly="1"/>
+                                    <field name="product_cost" readonly="1"/>
+                                </group>
+                            </group>
+                            <group string="Monthly Demand Analysis">
+                                <group>
+                                    <field name="analysis_months" readonly="1"/>
+                                    <field name="date_from" readonly="1"/>
+                                    <field name="date_to" readonly="1"/>
+                                    <field name="total_qty_sold" readonly="1"/>
+                                    <field name="avg_monthly_demand" readonly="1"/>
+                                </group>
+                                <group>
+                                    <field name="is_dead_stock" readonly="1"/>
+                                    <field name="last_sale_date" readonly="1"/>
+                                    <field name="months_since_last_sale" readonly="1"/>
+                                </group>
+                            </group>
+                        </page>
+
+                        <page string="📈 Trend &amp; Seasonal">
+                            <group string="Demand Trend">
+                                <group>
+                                    <field name="demand_trend" readonly="1"/>
+                                    <field name="trend_pct" readonly="1" string="Change %"/>
+                                    <field name="prev_period_qty_sold" readonly="1"/>
+                                </group>
+                            </group>
+                            <group string="Seasonal Comparison (vs Last Year)">
+                                <group>
+                                    <field name="same_period_last_year_qty" readonly="1"/>
+                                    <field name="seasonal_note" readonly="1"/>
+                                </group>
+                            </group>
+                        </page>
+
+                        <page string="🚚 Vendor">
+                            <group string="Vendor Information">
+                                <group>
+                                    <field name="vendor_id" readonly="1"/>
+                                    <field name="vendor_stated_lead_days" readonly="1"/>
+                                    <field name="vendor_actual_avg_days" readonly="1"/>
+                                </group>
+                                <group>
+                                    <field name="vendor_performance_note" readonly="1"/>
+                                </group>
+                            </group>
+                        </page>
+
+                        <page string="🧮 Calculation">
+                            <group string="Budget">
+                                <field name="within_budget" readonly="1"/>
+                                <field name="budget_rank" readonly="1"/>
+                            </group>
+                            <field name="notes" readonly="1" nolabel="1"
+                                   style="font-family: monospace; background:#f5f5f5;
+                                          padding:14px; border-radius:4px; white-space:pre-wrap;
+                                          font-size:12px; line-height:1.6;"/>
+                        </page>
+
+                    </notebook>
+                </sheet>
+            </form>
+        </field>
+    </record>
+
+    <record id="view_smart_reorder_suggestion_search" model="ir.ui.view">
+        <field name="name">smart.reorder.suggestion.search</field>
+        <field name="model">smart.reorder.suggestion</field>
+        <field name="arch" type="xml">
+            <search string="Search Reorder Suggestions">
+
+                <field name="product_id"/>
+                <field name="default_code" string="Part Number"/>
+                <field name="warehouse_id"/>
+                <field name="company_id" groups="base.group_multi_company"/>
+                <field name="product_categ_id"/>
+                <field name="vendor_id" string="Vendor"/>
+
+                <filter name="reorder_needed"  string="🔁 Needs Reorder"
+                        domain="[('reorder_needed','=',True), ('po_ids', '=', False)]"/>
+                <filter name="critical"        string="🔴 Critical (Negative)"
+                        domain="[('urgency','=','critical')]"/>
+                <filter name="urgent"          string="🟠 Urgent"
+                        domain="[('urgency','=','urgent')]"/>
+                <filter name="dead_stock"      string="💀 Dead Stock"
+                        domain="[('is_dead_stock','=',True)]"/>
+                <filter name="within_budget"   string="💰 Within Budget"
+                        domain="[('within_budget','=',True),('reorder_needed','=',True)]"/>
+
+                <separator/>
+
+                <filter name="fast_movers"     string="⚡ A — Fast Movers"
+                        domain="[('abc_class','=','A')]"/>
+                <filter name="medium_movers"   string="🔶 B — Medium Movers"
+                        domain="[('abc_class','=','B')]"/>
+                <filter name="slow_movers"     string="🐢 C — Slow/Dead"
+                        domain="[('abc_class','=','C')]"/>
+
+                <separator/>
+
+                <filter name="rising"          string="↑ Rising Demand"
+                        domain="[('demand_trend','=','up')]"/>
+                <filter name="falling"         string="↓ Falling Demand"
+                        domain="[('demand_trend','=','down')]"/>
+
+                <separator/>
+                <filter name="today"           string="Today's Analysis"
+                        domain="[('analysis_date','=',context_today().strftime('%Y-%m-%d'))]"/>
+
+                <group expand="0" string="Group By">
+                    <filter name="gb_urgency"   string="Urgency"
+                            context="{'group_by':'urgency'}"/>
+                    <filter name="gb_company"   string="Company"
+                            context="{'group_by':'company_id'}"/>
+                    <filter name="gb_warehouse" string="Warehouse"
+                            context="{'group_by':'warehouse_id'}"/>
+                    <filter name="gb_abc"       string="ABC Class"
+                            context="{'group_by':'abc_class'}"/>
+                    <filter name="gb_trend"     string="Demand Trend"
+                            context="{'group_by':'demand_trend'}"/>
+                    <filter name="gb_category"  string="Product Category"
+                            context="{'group_by':'product_categ_id'}"/>
+                    <filter name="gb_vendor"    string="Vendor"
+                            context="{'group_by':'vendor_id'}"/>
+                </group>
+
+            </search>
+        </field>
+    </record>
+
+    <record id="action_smart_reorder_suggestions" model="ir.actions.act_window">
+        <field name="name">Reorder Suggestions</field>
+        <field name="res_model">smart.reorder.suggestion</field>
+        <field name="view_mode">tree,form</field>
+        <field name="search_view_id" ref="view_smart_reorder_suggestion_search"/>
+        <field name="context">{'search_default_reorder_needed': 1}</field>
+    </record>
+
+    <record id="action_smart_reorder_all" model="ir.actions.act_window">
+        <field name="name">All Products Analysis</field>
+        <field name="res_model">smart.reorder.suggestion</field>
+        <field name="view_mode">tree,form</field>
+        <field name="search_view_id" ref="view_smart_reorder_suggestion_search"/>
+    </record>
+
+    <record id="action_smart_reorder_critical" model="ir.actions.act_window">
+        <field name="name">🔴 Critical — Negative Stock</field>
+        <field name="res_model">smart.reorder.suggestion</field>
+        <field name="view_mode">tree,form</field>
+        <field name="domain">[('urgency','=','critical')]</field>
+        <field name="search_view_id" ref="view_smart_reorder_suggestion_search"/>
+    </record>
+
+    <record id="action_smart_reorder_dead_stock" model="ir.actions.act_window">
+        <field name="name">💀 Dead Stock</field>
+        <field name="res_model">smart.reorder.suggestion</field>
+        <field name="view_mode">tree,form</field>
+        <field name="domain">[('is_dead_stock','=',True)]</field>
+        <field name="search_view_id" ref="view_smart_reorder_suggestion_search"/>
+    </record>
+
+    <record id="action_smart_reorder_budget" model="ir.actions.act_window">
+        <field name="name">💰 Within Budget</field>
+        <field name="res_model">smart.reorder.suggestion</field>
+        <field name="view_mode">tree,form</field>
+        <field name="domain">[('within_budget','=',True),('reorder_needed','=',True)]</field>
+        <field name="context">{'search_default_within_budget': 1}</field>
+        <field name="search_view_id" ref="view_smart_reorder_suggestion_search"/>
+    </record>
+
+</odoo>

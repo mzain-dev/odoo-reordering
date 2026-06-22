@@ -1,0 +1,65 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <menuitem id="menu_smart_reorder_root"
+              name="Reorder Advisor"
+              groups="smart_reorder_advisor.group_smart_reorder_user"
+              sequence="85"/>
+
+    <menuitem id="menu_smart_reorder_dashboard"
+              name="Dashboard"
+              parent="menu_smart_reorder_root"
+              action="action_smart_reorder_dashboard"
+              sequence="1"/>
+
+    <!-- Suggestions -->
+    <menuitem id="menu_smart_reorder_suggestions"
+              name="Reorder Suggestions"
+              parent="menu_smart_reorder_root"
+              sequence="2"/>
+    <menuitem id="menu_smart_reorder_suggestions_main"
+              name="Needs Reorder"
+              parent="menu_smart_reorder_suggestions"
+              action="action_smart_reorder_suggestions"
+              sequence="1"/>
+    <menuitem id="menu_smart_reorder_critical"
+              name="🔴 Critical — Negative Stock"
+              parent="menu_smart_reorder_suggestions"
+              action="action_smart_reorder_critical"
+              sequence="2"/>
+    <menuitem id="menu_smart_reorder_dead_stock"
+              name="💀 Dead Stock"
+              parent="menu_smart_reorder_suggestions"
+              action="action_smart_reorder_dead_stock"
+              sequence="3"/>
+    <menuitem id="menu_smart_reorder_budget"
+              name="💰 Within Budget"
+              parent="menu_smart_reorder_suggestions"
+              action="action_smart_reorder_budget"
+              sequence="4"/>
+    <menuitem id="menu_smart_reorder_all"
+              name="All Products"
+              parent="menu_smart_reorder_suggestions"
+              action="action_smart_reorder_all"
+              sequence="5"/>
+
+    <!-- Generate wizard -->
+    <menuitem id="menu_smart_reorder_generate"
+              name="⚙️ Generate Analysis"
+              parent="menu_smart_reorder_root"
+              action="action_generate_suggestions_wizard"
+              sequence="3"
+              groups="smart_reorder_advisor.group_smart_reorder_manager"/>
+
+    <!-- Config -->
+    <menuitem id="menu_smart_reorder_config"
+              name="Configuration"
+              parent="menu_smart_reorder_root"
+              sequence="10"
+              groups="smart_reorder_advisor.group_smart_reorder_manager"/>
+    <menuitem id="menu_smart_reorder_config_settings"
+              name="Company Settings"
+              parent="menu_smart_reorder_config"
+              action="action_smart_reorder_config"
+              sequence="1"
+              groups="smart_reorder_advisor.group_smart_reorder_manager"/>
+</odoo>

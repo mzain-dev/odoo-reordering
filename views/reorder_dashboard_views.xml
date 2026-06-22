@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+
+    <!-- OWL Dashboard Client Action -->
+    <record id="action_smart_reorder_dashboard" model="ir.actions.client">
+        <field name="name">Reorder Dashboard</field>
+        <field name="tag">smart_reorder.Dashboard</field>
+    </record>
+
+</odoo>

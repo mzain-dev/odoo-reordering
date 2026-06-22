@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+
+    <!-- Individual product report -->
+    <record id="action_report_reorder_suggestion" model="ir.actions.report">
+        <field name="name">Reorder Suggestion Detail</field>
+        <field name="model">smart.reorder.suggestion</field>
+        <field name="report_type">qweb-pdf</field>
+        <field name="report_name">smart_reorder_advisor.report_reorder_suggestions_document</field>
+        <field name="report_file">smart_reorder_advisor.report_reorder_suggestions_document</field>
+        <field name="binding_model_id" ref="model_smart_reorder_suggestion"/>
+        <field name="binding_type">report</field>
+    </record>
+
+    <!-- Summary report: selected products in one PDF -->
+    <record id="action_report_reorder_summary" model="ir.actions.report">
+        <field name="name">Reorder Summary Report (PDF)</field>
+        <field name="model">smart.reorder.suggestion</field>
+        <field name="report_type">qweb-pdf</field>
+        <field name="report_name">smart_reorder_advisor.report_reorder_summary_document</field>
+        <field name="report_file">smart_reorder_advisor.report_reorder_summary_document</field>
+        <field name="binding_model_id" ref="model_smart_reorder_suggestion"/>
+        <field name="binding_type">report</field>
+        <field name="paperformat_id" ref="base.paperformat_euro"/>
+    </record>
+
+</odoo>

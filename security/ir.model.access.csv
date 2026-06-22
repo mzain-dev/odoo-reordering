@@ -1,0 +1,7 @@
+id,name,model_id:id,group_id:id,perm_read,perm_write,perm_create,perm_unlink
+access_suggestion_user,smart.reorder.suggestion user,model_smart_reorder_suggestion,smart_reorder_advisor.group_smart_reorder_user,1,0,0,0
+access_suggestion_manager,smart.reorder.suggestion manager,model_smart_reorder_suggestion,smart_reorder_advisor.group_smart_reorder_manager,1,1,1,1
+access_config_user,smart.reorder.config user,model_smart_reorder_config,smart_reorder_advisor.group_smart_reorder_user,1,0,0,0
+access_config_manager,smart.reorder.config manager,model_smart_reorder_config,smart_reorder_advisor.group_smart_reorder_manager,1,1,1,1
+access_wizard_user,smart.reorder.wizard user,model_smart_reorder_wizard,smart_reorder_advisor.group_smart_reorder_user,1,1,1,1
+access_po_wizard_user,smart.reorder.po.wizard user,model_smart_reorder_po_wizard,smart_reorder_advisor.group_smart_reorder_user,1,1,1,1
