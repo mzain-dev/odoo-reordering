@@ -1,0 +1,160 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+
+    <record id="view_smart_reorder_cron_log_list" model="ir.ui.view">
+        <field name="name">smart.reorder.cron.log.tree</field>
+        <field name="model">smart.reorder.cron.log</field>
+        <field name="arch" type="xml">
+            <tree string="Reorder Analysis Run History"
+                  create="false" edit="false" delete="false"
+                  default_order="started_at desc"
+                  decoration-info="status == 'running'"
+                  decoration-success="status == 'completed'"
+                  decoration-warning="status == 'completed_with_errors'"
+                  decoration-danger="status == 'aborted'">
+                <field name="started_at"/>
+                <field name="finished_at"/>
+                <field name="duration_seconds" string="Duration (s)" optional="show"/>
+                <field name="company_id" groups="base.group_multi_company"/>
+                <field name="trigger_type" widget="badge"/>
+                <field name="status" widget="badge"
+                       decoration-info="status == 'running'"
+                       decoration-success="status == 'completed'"
+                       decoration-warning="status == 'completed_with_errors'"
+                       decoration-danger="status == 'aborted'"/>
+                <field name="products_processed"/>
+                <field name="critical_count"/>
+                <field name="error_count" string="Batch Errors" decoration-danger="error_count &gt; 0" optional="show"/>
+                <field name="error_notes" optional="hide"/>
+            </tree>
+        </field>
+    </record>
+
+    <record id="view_smart_reorder_cron_log_form" model="ir.ui.view">
+        <field name="name">smart.reorder.cron.log.form</field>
+        <field name="model">smart.reorder.cron.log</field>
+        <field name="arch" type="xml">
+            <form string="Reorder Analysis Run" create="false" edit="false">
+                <sheet>
+                    <div class="oe_title">
+                        <h1><field name="started_at" readonly="1"/></h1>
+                    </div>
+                    <group>
+                        <group>
+                            <field name="company_id" readonly="1" groups="base.group_multi_company"/>
+                            <field name="trigger_type" readonly="1"/>
+                            <field name="status" readonly="1" widget="badge"/>
+                        </group>
+                        <group>
+                            <field name="finished_at" readonly="1"/>
+                            <field name="duration_seconds" readonly="1"/>
+                            <field name="products_processed" readonly="1"/>
+                            <field name="critical_count" readonly="1"/>
+                            <field name="error_count" readonly="1"/>
+                        </group>
+                    </group>
+                    <group string="Error Notes" invisible="not error_notes">
+                        <field name="error_notes" readonly="1" nolabel="1"/>
+                    </group>
+                </sheet>
+            </form>
+        </field>
+    </record>
+
+    <record id="view_smart_reorder_cron_log_search" model="ir.ui.view">
+        <field name="name">smart.reorder.cron.log.search</field>
+        <field name="model">smart.reorder.cron.log</field>
+        <field name="arch" type="xml">
+            <search string="Search Run History">
+                <field name="company_id"/>
+
+                <filter name="running"               string="Running"               domain="[('status','=','running')]"/>
+                <filter name="completed"              string="Completed"             domain="[('status','=','completed')]"/>
+                <filter name="completed_with_errors"  string="Completed with Errors" domain="[('status','=','completed_with_errors')]"/>
+                <filter name="aborted"                string="Aborted"               domain="[('status','=','aborted')]"/>
+
+                <separator/>
+                <filter name="manual" string="Manual Runs"     domain="[('trigger_type','=','manual')]"/>
+                <filter name="cron"   string="Scheduled Cron"  domain="[('trigger_type','=','cron')]"/>
+
+                <separator/>
+                <filter name="has_batch_errors" string="Had Batch Errors" domain="[('error_count','&gt;',0)]"/>
+
+                <group expand="0" string="Group By">
+                    <filter name="gb_status"  string="Status"  context="{'group_by':'status'}"/>
+                    <filter name="gb_trigger" string="Trigger" context="{'group_by':'trigger_type'}"/>
+                    <filter name="gb_company" string="Company" context="{'group_by':'company_id'}"/>
+                </group>
+            </search>
+        </field>
+    </record>
+
+    <record id="view_smart_reorder_cron_log_graph" model="ir.ui.view">
+        <field name="name">smart.reorder.cron.log.graph</field>
+        <field name="model">smart.reorder.cron.log</field>
+        <field name="arch" type="xml">
+            <graph string="Run History — Duration &amp; Errors" type="bar" sample="1">
+                <field name="started_at" interval="week" type="row"/>
+                <field name="duration_seconds" type="measure"/>
+                <field name="error_count" type="measure"/>
+            </graph>
+        </field>
+    </record>
+
+    <record id="view_smart_reorder_cron_log_pivot" model="ir.ui.view">
+        <field name="name">smart.reorder.cron.log.pivot</field>
+        <field name="model">smart.reorder.cron.log</field>
+        <field name="arch" type="xml">
+            <pivot string="Run History — Aggregated" sample="1">
+                <field name="started_at" interval="week" type="row"/>
+                <field name="status" type="col"/>
+                <field name="duration_seconds" type="measure"/>
+                <field name="error_count" type="measure"/>
+                <field name="products_processed" type="measure"/>
+                <field name="critical_count" type="measure"/>
+            </pivot>
+        </field>
+    </record>
+
+    <record id="action_smart_reorder_cron_log" model="ir.actions.act_window">
+        <field name="name">Run History</field>
+        <field name="res_model">smart.reorder.cron.log</field>
+        <field name="view_mode">tree,graph,pivot,form</field>
+        <field name="search_view_id" ref="view_smart_reorder_cron_log_search"/>
+        <field name="context">{'search_default_completed': 1}</field>
+    </record>
+
+    <record id="view_smart_reorder_observability_dashboard_form" model="ir.ui.view">
+        <field name="name">smart.reorder.observability.dashboard.form</field>
+        <field name="model">smart.reorder.observability.dashboard</field>
+        <field name="arch" type="xml">
+            <form string="Observability Dashboard" create="false" edit="false" delete="false">
+                <sheet>
+                    <div class="oe_title">
+                        <h1>Reorder Observability Dashboard</h1>
+                    </div>
+                    <group>
+                        <group string="Cron Run Statistics (Last 30 Days)">
+                            <field name="total_runs" readonly="1"/>
+                            <field name="failed_runs" readonly="1"/>
+                            <field name="failure_rate_30_days" widget="percentage" readonly="1"/>
+                            <field name="avg_duration" readonly="1" string="Avg Run Duration (s)"/>
+                        </group>
+                        <group string="Real-Time Hook Observability">
+                            <field name="picking_hook_errors" readonly="1" decoration-danger="picking_hook_errors &gt; 0"/>
+                        </group>
+                    </group>
+                </sheet>
+            </form>
+        </field>
+    </record>
+
+    <!-- Action to open it directly -->
+    <record id="action_smart_reorder_observability_dashboard" model="ir.actions.server">
+        <field name="name">Observability Dashboard</field>
+        <field name="model_id" ref="model_smart_reorder_observability_dashboard"/>
+        <field name="state">code</field>
+        <field name="code">action = model.action_open_dashboard()</field>
+    </record>
+
+</odoo>

@@ -76,6 +76,8 @@ class GenerateSuggestionsWizard(models.TransientModel):
         result = self.env['smart.reorder.suggestion'].generate_suggestions(
             company_ids=company_ids,
             warehouse_ids=warehouse_ids,
+            include_zero_demand=self.include_zero_demand,  # ← NEW
+            trigger_type='manual',
         )
 
         # Show result summary and redirect to suggestions

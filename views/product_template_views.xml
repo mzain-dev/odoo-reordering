@@ -5,9 +5,19 @@
         <field name="model">product.template</field>
         <field name="inherit_id" ref="stock.view_template_property_form"/>
         <field name="arch" type="xml">
+            <xpath expr="//div[@name='button_box']" position="inside">
+                <button name="action_view_predecessors" type="object" class="oe_stat_button" icon="fa-history" invisible="predecessor_count == 0">
+                    <field name="predecessor_count" widget="statinfo" string="Predecessors"/>
+                </button>
+            </xpath>
             <xpath expr="//page[@name='inventory']" position="inside">
                 <group string="Smart Reorder Advisor">
                     <field name="exclude_from_reorder_advisor"/>
+                </group>
+            </xpath>
+            <xpath expr="//page[@name='purchase']" position="inside">
+                <group string="Smart Reorder - Supersession">
+                    <field name="superseded_by_id"/>
                 </group>
             </xpath>
         </field>

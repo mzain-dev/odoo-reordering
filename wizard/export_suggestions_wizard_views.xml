@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+
+    <record id="view_export_suggestions_wizard_form" model="ir.ui.view">
+        <field name="name">smart.reorder.export.wizard.form</field>
+        <field name="model">smart.reorder.export.wizard</field>
+        <field name="arch" type="xml">
+            <form string="Export Reorder Suggestions">
+                <div class="oe_title">
+                    <h2>📊 Export to Excel</h2>
+                </div>
+                <group>
+                    <p>
+                        This will export
+                        <field name="record_count" readonly="1" nolabel="1" class="oe_inline fw-bold"/>
+                        suggestion(s) — matching whatever filter or selection is
+                        currently active in the list — to an Excel (.xlsx) file.
+                    </p>
+                </group>
+                <footer>
+                    <button name="action_export"
+                            string="📊 Export to Excel"
+                            type="object"
+                            class="btn-primary"/>
+                    <button string="Cancel" class="btn-secondary" special="cancel"/>
+                </footer>
+            </form>
+        </field>
+    </record>
+
+    <record id="action_export_suggestions_wizard" model="ir.actions.act_window">
+        <field name="name">Export Reorder Suggestions</field>
+        <field name="res_model">smart.reorder.export.wizard</field>
+        <field name="view_mode">form</field>
+        <field name="target">new</field>
+    </record>
+
+</odoo>

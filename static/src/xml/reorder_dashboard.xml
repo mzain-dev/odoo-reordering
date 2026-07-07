@@ -138,6 +138,40 @@
             </div>
         </div>
 
+        <!-- ── SECTION: BACK-TESTING SCORES (Feature 15) ── -->
+        <div class="sra_section_label">📊 Forecast Accuracy Back-testing (MAPE)</div>
+        <div class="sra_kpi_row" style="margin-bottom: 2rem;">
+            <div class="sra_kpi" style="border: 2px solid #3b82f6; background-color: #eff6ff;" t-on-click="openBacktest">
+                <div class="sra_kpi_icon">📉</div>
+                <div class="sra_kpi_value" style="color: #3b82f6;"><t t-esc="state.backtest.overall_mape"/>%</div>
+                <div class="sra_kpi_label">Overall MAPE<br/><small>Lower is better</small></div>
+            </div>
+            <div class="sra_kpi" style="border: 1px solid #ddd; background-color: #fcfcfc;" t-on-click="openBacktest">
+                <div class="sra_kpi_icon">🅰️</div>
+                <div class="sra_kpi_value">
+                    <t t-if="state.backtest.mape_by_abc.A"><t t-esc="state.backtest.mape_by_abc.A"/>%</t>
+                    <t t-else="">—</t>
+                </div>
+                <div class="sra_kpi_label">Class A MAPE<br/><small>Fast movers</small></div>
+            </div>
+            <div class="sra_kpi" style="border: 1px solid #ddd; background-color: #fcfcfc;" t-on-click="openBacktest">
+                <div class="sra_kpi_icon">🅱️</div>
+                <div class="sra_kpi_value">
+                    <t t-if="state.backtest.mape_by_abc.B"><t t-esc="state.backtest.mape_by_abc.B"/>%</t>
+                    <t t-else="">—</t>
+                </div>
+                <div class="sra_kpi_label">Class B MAPE<br/><small>Medium movers</small></div>
+            </div>
+            <div class="sra_kpi" style="border: 1px solid #ddd; background-color: #fcfcfc;" t-on-click="openBacktest">
+                <div class="sra_kpi_icon">🆃</div>
+                <div class="sra_kpi_value">
+                    <t t-if="state.backtest.mape_by_abc.C"><t t-esc="state.backtest.mape_by_abc.C"/>%</t>
+                    <t t-else="">—</t>
+                </div>
+                <div class="sra_kpi_label">Class C MAPE<br/><small>Slow movers</small></div>
+            </div>
+        </div>
+
         <!-- ── SECTION 5: DETAIL TABLES ── -->
         <div class="sra_tables_grid">
 
@@ -151,7 +185,7 @@
                     <table class="sra_tbl">
                         <thead><tr>
                             <th>Part</th><th>Product</th><th>On Hand</th>
-                            <th>Reorder</th><th>Value</th>
+                            <th>Reorder</th><th>Est. Purchase Value</th>
                         </tr></thead>
                         <tbody>
                             <t t-foreach="state.topCritical" t-as="r" t-key="r.id">
@@ -160,7 +194,7 @@
                                     <td><t t-esc="r.product_id[1]"/></td>
                                     <td class="sra_neg"><t t-esc="r.qty_on_hand.toFixed(0)"/></td>
                                     <td class="sra_bold"><t t-esc="r.suggested_reorder_qty.toFixed(0)"/></td>
-                                    <td><t t-esc="formatCurrency(r.reorder_value)"/></td>
+                                    <td><t t-esc="formatCurrency(r.estimated_purchase_value)"/></td>
                                 </tr>
                             </t>
                         </tbody>
@@ -232,7 +266,7 @@
                     <table class="sra_tbl">
                         <thead><tr>
                             <th>Part</th><th>Product</th><th>Avg/Mo</th>
-                            <th>Trend</th><th>Value</th>
+                            <th>Trend</th><th>Est. Purchase Value</th>
                         </tr></thead>
                         <tbody>
                             <t t-foreach="state.topRising" t-as="r" t-key="r.id">
@@ -241,7 +275,7 @@
                                     <td><t t-esc="r.product_id[1]"/></td>
                                     <td><t t-esc="r.avg_monthly_demand.toFixed(1)"/></td>
                                     <td class="sra_green_txt">↑ <t t-esc="r.trend_pct.toFixed(0)"/>%</td>
-                                    <td><t t-esc="formatCurrency(r.reorder_value)"/></td>
+                                    <td><t t-esc="formatCurrency(r.estimated_purchase_value)"/></td>
                                 </tr>
                             </t>
                         </tbody>

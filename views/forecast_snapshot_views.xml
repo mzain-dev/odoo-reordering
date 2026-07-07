@@ -1,0 +1,104 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+
+    <record id="view_smart_reorder_forecast_snapshot_tree" model="ir.ui.view">
+        <field name="name">smart.reorder.forecast.snapshot.tree</field>
+        <field name="model">smart.reorder.forecast.snapshot</field>
+        <field name="arch" type="xml">
+            <tree string="Forecast Snapshots" create="false" edit="false" duplicate="false">
+                <field name="snapshot_date"/>
+                <field name="warehouse_id"/>
+                <field name="product_id"/>
+                <field name="abc_class"/>
+                <field name="forecast_demand"/>
+                <field name="confidence" widget="progressbar"/>
+                <field name="lead_time_days"/>
+                <field name="actual_sales"/>
+                <field name="absolute_error_pct" string="MAPE (%)"
+                       decoration-danger="absolute_error_pct &gt; 50"
+                       decoration-warning="absolute_error_pct &gt; 20"
+                       decoration-success="absolute_error_pct &lt;= 20"/>
+                <field name="evaluated" widget="boolean_toggle"/>
+            </tree>
+        </field>
+    </record>
+
+    <record id="view_smart_reorder_forecast_snapshot_form" model="ir.ui.view">
+        <field name="name">smart.reorder.forecast.snapshot.form</field>
+        <field name="model">smart.reorder.forecast.snapshot</field>
+        <field name="arch" type="xml">
+            <form string="Forecast Snapshot" create="false" edit="false">
+                <header>
+                    <button name="action_evaluate"
+                            string="🔄 Evaluate Snapshot"
+                            type="object"
+                            class="btn-primary"
+                            invisible="evaluated"/>
+                </header>
+                <sheet>
+                    <group>
+                        <group string="Run Details">
+                            <field name="snapshot_date" readonly="1"/>
+                            <field name="company_id" readonly="1"/>
+                            <field name="warehouse_id" readonly="1"/>
+                            <field name="product_id" readonly="1"/>
+                        </group>
+                        <group string="Forecasted Figures">
+                            <field name="forecast_demand" readonly="1"/>
+                            <field name="confidence" readonly="1" widget="progressbar"/>
+                            <field name="lead_time_days" readonly="1"/>
+                            <field name="abc_class" readonly="1"/>
+                        </group>
+                    </group>
+                    <group string="Back-testing Results">
+                        <group>
+                            <field name="evaluated" readonly="1"/>
+                            <field name="actual_sales" readonly="1"/>
+                        </group>
+                        <group>
+                            <field name="absolute_error_pct" readonly="1" string="Mean Absolute Percentage Error (MAPE %)"/>
+                        </group>
+                    </group>
+                </sheet>
+            </form>
+        </field>
+    </record>
+
+    <record id="view_smart_reorder_forecast_snapshot_search" model="ir.ui.view">
+        <field name="name">smart.reorder.forecast.snapshot.search</field>
+        <field name="model">smart.reorder.forecast.snapshot</field>
+        <field name="arch" type="xml">
+            <search string="Search Snapshots">
+                <field name="product_id"/>
+                <field name="warehouse_id"/>
+                <field name="abc_class"/>
+                <filter string="Unevaluated" name="unevaluated" domain="[('evaluated', '=', False)]"/>
+                <filter string="Evaluated" name="evaluated" domain="[('evaluated', '=', True)]"/>
+                <group expand="0" string="Group By">
+                    <filter string="Snapshot Date" name="group_by_date" context="{'group_by':'snapshot_date'}"/>
+                    <filter string="Warehouse" name="group_by_warehouse" context="{'group_by':'warehouse_id'}"/>
+                    <filter string="Product" name="group_by_product" context="{'group_by':'product_id'}"/>
+                    <filter string="ABC Class" name="group_by_abc" context="{'group_by':'abc_class'}"/>
+                </group>
+            </search>
+        </field>
+    </record>
+
+    <record id="action_smart_reorder_forecast_snapshot" model="ir.actions.act_window">
+        <field name="name">Forecast Back-testing</field>
+        <field name="res_model">smart.reorder.forecast.snapshot</field>
+        <field name="view_mode">tree,form</field>
+        <field name="search_view_id" ref="view_smart_reorder_forecast_snapshot_search"/>
+    </record>
+
+    <!-- Scorer Action -->
+    <record id="action_smart_reorder_forecast_snapshot_score" model="ir.actions.server">
+        <field name="name">🔄 Run Snapshot Back-testing Scorer</field>
+        <field name="model_id" ref="model_smart_reorder_forecast_snapshot"/>
+        <field name="state">code</field>
+        <field name="code">
+            env['smart.reorder.forecast.snapshot']._score_snapshots()
+        </field>
+    </record>
+
+</odoo>

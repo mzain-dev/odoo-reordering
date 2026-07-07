@@ -1,0 +1,125 @@
+name: Smart Reorder Advisor — CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: ["**"]
+
+jobs:
+  # ── Job 1: Lint ─────────────────────────────────────────────────────────────
+  lint:
+    name: Lint (flake8 + pylint-odoo)
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install lint tools
+        run: pip install flake8 pylint-odoo
+
+      - name: flake8
+        run: |
+          flake8 .
+
+      - name: pylint-odoo
+        # Only flag genuine errors; style warnings are handled by flake8
+        run: |
+          pylint --rcfile=.pylintrc-odoo .
+
+  # ── Job 2: Unit Tests ────────────────────────────────────────────────────────
+  tests:
+    name: Odoo 17 Unit Tests
+    runs-on: ubuntu-22.04
+    needs: lint
+
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_USER: odoo
+          POSTGRES_PASSWORD: odoo
+          POSTGRES_DB: odoo_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      ODOO_VERSION: "17.0"
+      DB_NAME: odoo_test
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: smart_reorder_advisor
+
+      - name: Cache Odoo source
+        id: cache-odoo
+        uses: actions/cache@v4
+        with:
+          path: odoo-src
+          key: odoo-17-src-${{ hashFiles('smart_reorder_advisor/__manifest__.py') }}
+
+      - name: Clone Odoo 17 (shallow)
+        if: steps.cache-odoo.outputs.cache-hit != 'true'
+        run: |
+          git clone --depth 1 --branch 17.0 \
+            https://github.com/odoo/odoo.git odoo-src
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y \
+            python3-pip python3-dev libxml2-dev libxslt1-dev \
+            libldap2-dev libsasl2-dev libpq-dev wkhtmltopdf
+
+      - name: Install Python dependencies
+        run: |
+          pip install -r odoo-src/requirements.txt
+          pip install openpyxl psycopg2-binary
+
+      - name: Initialise test database
+        run: |
+          python odoo-src/odoo-bin \
+            --addons-path=odoo-src/addons,. \
+            --db_host=127.0.0.1 --db_port=5432 \
+            --db_user=odoo --db_password=odoo \
+            -d $DB_NAME \
+            -i smart_reorder_advisor \
+            --stop-after-init \
+            --no-http \
+            2>&1 | tail -30
+
+      - name: Run test suite
+        run: |
+          python odoo-src/odoo-bin \
+            --addons-path=odoo-src/addons,. \
+            --db_host=127.0.0.1 --db_port=5432 \
+            --db_user=odoo --db_password=odoo \
+            -d $DB_NAME \
+            --test-enable \
+            --test-tags=smart_reorder_advisor \
+            --stop-after-init \
+            --no-http \
+            --log-level=test \
+            2>&1 | tee test-output.txt
+          # Fail the step if Odoo reported test failures
+          if grep -q "FAILED\|ERROR" test-output.txt; then
+            echo "Tests FAILED — see output above"
+            exit 1
+          fi
+
+      - name: Upload test output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-output
+          path: test-output.txt

@@ -4,14 +4,21 @@
 
         <!--
         ╔═══════════════════════════════════════════════════════════════════╗
-        ║  SCHEDULED ACTION — Weekly Reorder Analysis                       ║
+        ║  SCHEDULED ACTION — Reorder Analysis                              ║
         ║                                                                   ║
-        ║  Runs every Monday at 6:00 AM.                                   ║
-        ║  Recalculates all suggestions for all companies/warehouses.       ║
-        ║  Sends Odoo inbox notifications if critical items are found.      ║
+        ║  Initial schedule: every Monday at 6:00 AM (interval_number=1,    ║
+        ║  interval_type='weeks'). Recalculates all suggestions for all     ║
+        ║  companies/warehouses. Sends Odoo inbox notifications if          ║
+        ║  critical items are found.                                       ║
         ║                                                                   ║
-        ║  noupdate="1" means admins can change the schedule in the UI     ║
-        ║  without it being reset on module update.                        ║
+        ║  T-32: interval_number/interval_type are kept in sync with each   ║
+        ║  smart.reorder.config's "Analysis Frequency" field (weekly /      ║
+        ║  bi-weekly / monthly) by SmartReorderConfig._sync_cron_frequency  ║
+        ║  whenever that field is saved — a manager changes the schedule    ║
+        ║  from Configuration → Company Settings, not Scheduled Actions.    ║
+        ║                                                                   ║
+        ║  noupdate="1" means admins (or that sync logic) can change the   ║
+        ║  schedule without it being reset on module update.                ║
         ╚═══════════════════════════════════════════════════════════════════╝
         -->
 
@@ -24,7 +31,25 @@
             <field name="interval_type">weeks</field>
             <field name="numbercall">-1</field>
             <field name="doall" eval="False"/>
-            <field name="active">True</field>
+            <!-- Stays OFF on install. An admin must enable this manually from
+                 Settings → Technical → Scheduled Actions, and only after a staging
+                 dry-run plus a manual hand-check of a sample of products. -->
+            <field name="active">False</field>
+            <field name="user_id" ref="base.user_root"/>
+        </record>
+
+        <record id="cron_smart_reorder_score_snapshots" model="ir.cron">
+            <field name="name">Smart Reorder: Score Forecast Snapshots</field>
+            <field name="model_id" ref="model_smart_reorder_forecast_snapshot"/>
+            <field name="state">code</field>
+            <field name="code">model._score_snapshots()</field>
+            <field name="interval_number">1</field>
+            <field name="interval_type">weeks</field>
+            <field name="numbercall">-1</field>
+            <field name="doall" eval="False"/>
+            <!-- Enable manually after the analysis cron has been running long
+                 enough to have snapshots older than one lead time to score. -->
+            <field name="active">False</field>
             <field name="user_id" ref="base.user_root"/>
         </record>
 

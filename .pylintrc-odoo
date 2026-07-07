@@ -1,0 +1,20 @@
+[MASTER]
+load-plugins=pylint_odoo
+
+[MESSAGES CONTROL]
+# Only errors — conventions and warnings are handled by flake8
+disable=all
+enable=
+    E0001,  # syntax errors
+    E0102,  # class/function already defined
+    E0401,  # import errors
+    E0611,  # cannot import from module
+    E1101,  # module has no member
+    W0611,  # unused imports (promote to error in CI)
+    W0612,  # unused variables
+
+[FORMAT]
+max-line-length=120
+
+[ODOO]
+valid_odoo_versions=17.0

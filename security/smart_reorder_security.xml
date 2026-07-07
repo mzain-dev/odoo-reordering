@@ -59,5 +59,23 @@
             </field>
         </record>
 
+        <record id="rule_cron_log_company" model="ir.rule">
+            <field name="name">Smart Reorder Cron Log: Company isolation</field>
+            <field name="model_id" ref="model_smart_reorder_cron_log"/>
+            <field name="groups" eval="[(4, ref('group_smart_reorder_user'))]"/>
+            <field name="domain_force">
+                [('company_id', 'in', company_ids)]
+            </field>
+        </record>
+
+        <record id="rule_transfer_lane_company" model="ir.rule">
+            <field name="name">Smart Reorder Transfer Lane: Company isolation</field>
+            <field name="model_id" ref="model_smart_reorder_transfer_lane"/>
+            <field name="groups" eval="[(4, ref('group_smart_reorder_user'))]"/>
+            <field name="domain_force">
+                [('company_id', 'in', company_ids)]
+            </field>
+        </record>
+
     </data>
 </odoo>

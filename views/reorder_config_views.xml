@@ -6,17 +6,34 @@
         <field name="model">smart.reorder.config</field>
         <field name="arch" type="xml">
             <form string="Reorder Advisor Configuration">
+                <header>
+                    <button name="action_clear_lock"
+                            string="🔓 Clear Stuck Lock"
+                            type="object"
+                            class="btn-warning"
+                            invisible="not is_running"
+                            confirm="This will release the run lock even if an analysis is still genuinely in progress. Only use this if you are sure the previous run crashed. Continue?"/>
+                </header>
                 <sheet>
+                    <field name="is_running" invisible="1"/>
                     <div class="oe_title">
                         <h1><field name="company_id" readonly="1"/></h1>
                     </div>
                     <field name="currency_id" invisible="1"/>
+
+                    <div class="alert alert-warning" role="alert" invisible="not is_running">
+                        🔒 <strong>Analysis run in progress</strong> — started
+                        <field name="run_started_at" readonly="1" nolabel="1"/>.
+                        A new cron or manual run will be skipped until this finishes
+                        (or is treated as stuck after 60 minutes).
+                    </div>
 
                     <div class="row">
                         <div class="col-md-6">
                             <group string="📊 Phase 1 — Analysis Settings (Monthly)">
                                 <field name="analysis_period" widget="radio"/>
                                 <field name="safety_buffer_months"/>
+                                <field name="order_cycle_months"/>
                                 <field name="default_lead_time_months"/>
                             </group>
                         </div>
@@ -59,6 +76,24 @@
 
                     <div class="row">
                         <div class="col-md-6">
+                            <group string="📅 Scheduling">
+                                <field name="cron_frequency" widget="radio"/>
+                            </group>
+                        </div>
+                        <div class="col-md-6" style="margin-top: 1.5rem;">
+                            <div class="alert alert-info" role="alert" style="margin: 0;">
+                                Saving this updates the <strong>Smart Reorder: Weekly Analysis</strong>
+                                scheduled action directly — no need to open
+                                <em>Settings → Technical → Scheduled Actions</em>.
+                                That cron processes every company in one run, so this
+                                setting is effectively system-wide: whichever company's
+                                config is saved most recently wins.
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="row">
+                        <div class="col-md-6">
                             <group string="📈 Phase 2 — Demand Trend Settings">
                                 <field name="trend_comparison_months"/>
                                 <field name="send_email_report"/>
@@ -80,10 +115,20 @@
                             <field name="default_vendor_id"
                                    invisible="not allow_draft_po"/>
                             <field name="auto_flag_on_negative"/>
+                            <field name="picking_hook_error_count" readonly="1" decoration-danger="picking_hook_error_count &gt; 0"/>
                         </group>
                         <group>
                             <field name="track_vendor_performance"/>
+                            <field name="alt_vendor_lead_margin_days"/>
+                            <field name="snapshot_retention_months"/>
+                            <field name="transfer_surplus_threshold"/>
+                            <field name="default_internal_transfer_days"/>
                         </group>
+                    </group>
+
+                    <group string="🔎 Needs-Review Auto-Triage">
+                        <field name="needs_review_delta_threshold"/>
+                        <field name="overstock_ceiling_months"/>
                     </group>
                 </sheet>
             </form>
@@ -102,6 +147,7 @@
                 <field name="budget_cap"/>
                 <field name="send_email_report"/>
                 <field name="allow_draft_po"/>
+                <field name="is_running" optional="show" readonly="1"/>
             </tree>
         </field>
     </record>

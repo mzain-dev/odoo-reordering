@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+
+    <record id="view_smart_reorder_transfer_lane_list" model="ir.ui.view">
+        <field name="name">smart.reorder.transfer.lane.tree</field>
+        <field name="model">smart.reorder.transfer.lane</field>
+        <field name="arch" type="xml">
+            <tree string="Transfer Lanes" editable="bottom">
+                <field name="source_warehouse_id"/>
+                <field name="dest_warehouse_id"/>
+                <field name="lead_time_days"/>
+                <field name="company_id" groups="base.group_multi_company" optional="show"/>
+            </tree>
+        </field>
+    </record>
+
+    <record id="view_smart_reorder_transfer_lane_form" model="ir.ui.view">
+        <field name="name">smart.reorder.transfer.lane.form</field>
+        <field name="model">smart.reorder.transfer.lane</field>
+        <field name="arch" type="xml">
+            <form string="Transfer Lane">
+                <sheet>
+                    <div class="oe_title">
+                        <h1>
+                            <field name="source_warehouse_id" placeholder="Source Warehouse"/>
+                            →
+                            <field name="dest_warehouse_id" placeholder="Destination Warehouse"/>
+                        </h1>
+                    </div>
+                    <group>
+                        <field name="lead_time_days"/>
+                        <field name="company_id" groups="base.group_multi_company" readonly="1"/>
+                    </group>
+                </sheet>
+            </form>
+        </field>
+    </record>
+
+    <record id="action_smart_reorder_transfer_lane" model="ir.actions.act_window">
+        <field name="name">Transfer Lanes</field>
+        <field name="res_model">smart.reorder.transfer.lane</field>
+        <field name="view_mode">tree,form</field>
+        <field name="help">
+            Define a transfer lane to give a specific warehouse-to-warehouse lead
+            time — e.g. Muscat → Salalah: 3 days, Salalah → Sohar: 5 days — instead
+            of relying on the company-wide default lead time for every pair.
+        </field>
+    </record>
+
+</odoo>

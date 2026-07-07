@@ -19,6 +19,7 @@
 .sra_topbar_right { display: flex; gap: 12px; align-items: center; }
 .sra_select     { padding: 8px 12px; border-radius: 6px; border: 1px solid #555;
                   background: #3d5166; color: white; min-width: 200px; font-size: 0.88rem; }
+.sra_select option { color: #333; background: white; }
 .sra_btn_run    { padding: 8px 18px; border-radius: 6px; font-size: 0.88rem;
                   background: #27ae60; border: none; color: white; cursor: pointer; }
 .sra_btn_run:hover { background: #229954; }
