@@ -7,6 +7,7 @@
         <field name="arch" type="xml">
             <tree string="Forecast Snapshots" create="false" edit="false" duplicate="false">
                 <field name="snapshot_date"/>
+                <field name="evaluable_from"/>
                 <field name="warehouse_id"/>
                 <field name="product_id"/>
                 <field name="abc_class"/>
@@ -18,7 +19,7 @@
                        decoration-danger="absolute_error_pct &gt; 50"
                        decoration-warning="absolute_error_pct &gt; 20"
                        decoration-success="absolute_error_pct &lt;= 20"/>
-                <field name="evaluated" widget="boolean_toggle"/>
+                <field name="evaluated" readonly="1"/>
             </tree>
         </field>
     </record>
@@ -33,12 +34,14 @@
                             string="🔄 Evaluate Snapshot"
                             type="object"
                             class="btn-primary"
-                            invisible="evaluated"/>
+                            invisible="evaluated"
+                            groups="smart_reorder_advisor.group_smart_reorder_manager"/>
                 </header>
                 <sheet>
                     <group>
                         <group string="Run Details">
                             <field name="snapshot_date" readonly="1"/>
+                            <field name="evaluable_from" readonly="1"/>
                             <field name="company_id" readonly="1"/>
                             <field name="warehouse_id" readonly="1"/>
                             <field name="product_id" readonly="1"/>
@@ -89,6 +92,7 @@
         <field name="res_model">smart.reorder.forecast.snapshot</field>
         <field name="view_mode">tree,form</field>
         <field name="search_view_id" ref="view_smart_reorder_forecast_snapshot_search"/>
+        <field name="context">{'search_default_evaluated': 1, 'search_default_group_by_product': 1}</field>
     </record>
 
     <!-- Scorer Action -->
@@ -99,6 +103,19 @@
         <field name="code">
             env['smart.reorder.forecast.snapshot']._score_snapshots()
         </field>
+    </record>
+
+    <!-- Multi Evaluate Action -->
+    <record id="action_smart_reorder_forecast_snapshot_score_multi" model="ir.actions.server">
+        <field name="name">🔄 Evaluate Selected Snapshots</field>
+        <field name="model_id" ref="model_smart_reorder_forecast_snapshot"/>
+        <field name="binding_model_id" ref="model_smart_reorder_forecast_snapshot"/>
+        <field name="binding_view_types">list</field>
+        <field name="state">code</field>
+        <field name="code">
+            action = records.action_evaluate()
+        </field>
+        <field name="groups_id" eval="[(4, ref('smart_reorder_advisor.group_smart_reorder_manager'))]"/>
     </record>
 
 </odoo>

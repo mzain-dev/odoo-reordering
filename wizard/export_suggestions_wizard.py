@@ -17,12 +17,19 @@ TREND_LABELS = {
     'down':   'Falling',
     'new':    'New / No History',
 }
+PATTERN_LABELS = {
+    'regular': 'Sells Regularly',
+    'sometimes': 'Sells Sometimes',
+    'big_order_mixed': 'Big Order Mixed In',
+    'one_time_big_order': 'One-Time Big Order Only',
+    'new': 'New — No Sales History',
+}
 
 EXPORT_HEADERS = [
     'Part Number', 'Product Name', 'Category', 'Warehouse',
     'On Hand Qty', 'Avg Monthly Demand', 'Lead Time (Months)',
     'Suggested Reorder Qty', 'Reorder Value', 'Urgency', 'ABC Class',
-    'Demand Trend', 'Budget Rank', 'Vendor', 'Last Sale Date',
+    'Sales Pattern', 'Demand Trend', 'Budget Rank', 'Vendor', 'Last Sale Date',
     'Months Left After Order',
 ]
 
@@ -110,11 +117,12 @@ class ExportSuggestionsWizard(models.TransientModel):
             ws.cell(row=row, column=9,  value=rec.reorder_value)
             ws.cell(row=row, column=10, value=URGENCY_LABELS.get(rec.urgency, rec.urgency or ''))
             ws.cell(row=row, column=11, value=rec.abc_class or '')
-            ws.cell(row=row, column=12, value=TREND_LABELS.get(rec.demand_trend, rec.demand_trend or ''))
-            ws.cell(row=row, column=13, value=rec.budget_rank)
-            ws.cell(row=row, column=14, value=rec.vendor_id.name or '')
-            ws.cell(row=row, column=15, value=rec.last_sale_date or None)
-            ws.cell(row=row, column=16, value=rec.months_of_stock_after_order)
+            ws.cell(row=row, column=12, value=PATTERN_LABELS.get(rec.sales_pattern, rec.sales_pattern or ''))
+            ws.cell(row=row, column=13, value=TREND_LABELS.get(rec.demand_trend, rec.demand_trend or ''))
+            ws.cell(row=row, column=14, value=rec.budget_rank)
+            ws.cell(row=row, column=15, value=rec.vendor_id.name or '')
+            ws.cell(row=row, column=16, value=rec.last_sale_date or None)
+            ws.cell(row=row, column=17, value=rec.months_of_stock_after_order)
 
         for col in range(1, len(EXPORT_HEADERS) + 1):
             ws.column_dimensions[get_column_letter(col)].width = max(14, len(EXPORT_HEADERS[col - 1]) + 2)

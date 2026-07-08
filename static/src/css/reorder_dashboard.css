@@ -101,6 +101,14 @@
 .sra_trend_up          { border-left-color: #27ae60; }
 .sra_trend_stable      { border-left-color: #3498db; cursor: default; }
 .sra_trend_down        { border-left-color: #e74c3c; }
+
+/* ── SALES PATTERN ROW ── */
+.sra_pattern_row { display: grid; grid-template-columns: repeat(5,1fr); gap: 12px; margin-bottom: 4px; }
+.sra_pattern_regular    { border-left-color: #27ae60; }
+.sra_pattern_sometimes  { border-left-color: #3498db; }
+.sra_pattern_mixed      { border-left-color: #e67e22; }
+.sra_pattern_one_time   { border-left-color: #e74c3c; }
+.sra_pattern_new        { border-left-color: #95a5a6; }
 .sra_trend_icon        { font-size: 2rem; line-height: 1; }
 .sra_trend_val         { font-size: 2rem; font-weight: 700; color: #2c3e50; }
 .sra_trend_lbl         { font-size: 0.82rem; color: #666; margin-top: 4px; }
@@ -131,10 +139,12 @@
 .sra_empty     { text-align: center; padding: 24px; color: #bbb; font-size: 0.9rem; }
 
 /* ── RESPONSIVE ── */
-@media (max-width: 1400px) { .sra_kpi_row { grid-template-columns: repeat(3,1fr); } }
+@media (max-width: 1400px) { .sra_kpi_row { grid-template-columns: repeat(3,1fr); }
+                            .sra_pattern_row { grid-template-columns: repeat(3,1fr); } }
 @media (max-width: 1100px) { .sra_tables_grid { grid-template-columns: 1fr; }
                               .sra_value_row { grid-template-columns: 1fr 1fr; } }
 @media (max-width: 768px)  { .sra_kpi_row { grid-template-columns: repeat(2,1fr); }
                               .sra_topbar { flex-direction: column; gap: 12px; }
                               .sra_trend_row { grid-template-columns: 1fr; }
+                              .sra_pattern_row { grid-template-columns: 1fr; }
                               .sra_value_row { grid-template-columns: 1fr; } }

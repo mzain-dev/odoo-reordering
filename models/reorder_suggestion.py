@@ -185,8 +185,27 @@ class SmartReorderSuggestion(models.Model):
     abc_class = fields.Selection([
         ('A', 'A — Fast Mover'),
         ('B', 'B — Medium Mover'),
-        ('C', 'C — Slow / Dead'),
+        ('C', 'C — Slow Mover'),
     ], string='ABC Class', readonly=True, index=True)
+
+    sales_pattern = fields.Selection([
+        ('regular', 'Sells Regularly'),
+        ('sometimes', 'Sells Sometimes'),
+        ('big_order_mixed', 'Big Order Mixed In'),
+        ('one_time_big_order', 'One-Time Big Order Only'),
+        ('new', 'New — No Sales History'),
+    ], string='Sales Pattern', readonly=True, index=True)
+
+    reorder_behavior = fields.Selection(
+        related='product_id.product_tmpl_id.reorder_behavior',
+        string='How to Order This Part',
+        readonly=False,
+    )
+
+    has_bulk_concentration = fields.Boolean(
+        string='Has Bulk Concentration',
+        readonly=True,
+    )
 
     urgency = fields.Selection([
         ('critical', '🔴 Critical — Negative Stock'),
@@ -270,8 +289,22 @@ class SmartReorderSuggestion(models.Model):
         string='Drafted Orders',
         readonly=True,
     )
+    draft_po_ref = fields.Char(
+        string='Draft PO',
+        compute='_compute_draft_po_ref',
+        help='Reference of any linked purchase order still in draft state. '
+             'While a draft PO is open, this suggestion holds off on '
+             're-proposing a quantity or re-arming Reorder Needed — a note '
+             'in the Calculation Breakdown explains why instead.'
+    )
 
     notes = fields.Text(string='Calculation Breakdown', readonly=True)
+
+    @api.depends('po_ids', 'po_ids.state', 'po_ids.name')
+    def _compute_draft_po_ref(self):
+        for rec in self:
+            drafts = rec.po_ids.filtered(lambda po: po.state == 'draft')
+            rec.draft_po_ref = ', '.join(drafts.mapped('name')) if drafts else False
 
     # ── Snooze ────────────────────────────────────────────────────────────────
     snoozed_until = fields.Date(
@@ -375,9 +408,9 @@ class SmartReorderSuggestion(models.Model):
         return calc_seasonal_note(current_qty, ly_qty)
 
     @staticmethod
-    def _compute_robust_monthly_demand(monthly_series):
+    def _compute_robust_monthly_demand(monthly_series, min_spike_size=10.0):
         from .reorder_engine import compute_robust_monthly_demand
-        return compute_robust_monthly_demand(monthly_series)
+        return compute_robust_monthly_demand(monthly_series, min_spike_size=min_spike_size)
 
     @staticmethod
     def _calc_delta_pct(old_qty, new_qty):
@@ -386,15 +419,17 @@ class SmartReorderSuggestion(models.Model):
 
     @staticmethod
     def _compute_needs_review(avg_monthly, suggested_qty, is_dead_stock, delta_pct, delta_threshold,
-                              mos_after_order=0.0, overstock_ceiling_months=0.0):
+                              mos_after_order=0.0, overstock_ceiling_months=0.0,
+                              sales_pattern=False, has_bulk_concentration=False):
         from .reorder_engine import compute_needs_review
         return compute_needs_review(avg_monthly, suggested_qty, is_dead_stock, delta_pct, delta_threshold,
-                                    mos_after_order, overstock_ceiling_months)
+                                    mos_after_order, overstock_ceiling_months,
+                                    sales_pattern, has_bulk_concentration)
 
     @staticmethod
-    def _compute_confidence_score(monthly_series, excluded_months):
+    def _compute_confidence_score(monthly_series, excluded_months, reorder_behavior='system'):
         from .reorder_engine import compute_confidence_score
-        return compute_confidence_score(monthly_series, excluded_months)
+        return compute_confidence_score(monthly_series, excluded_months, reorder_behavior)
 
     @staticmethod
     def _build_vendor_perf_note(actual_avg_days, stated_lead_days, with_emoji=False):
@@ -534,8 +569,9 @@ class SmartReorderSuggestion(models.Model):
                 'status': 'running',
             })
             try:
+                comp_include_zero = config.cron_include_zero_demand if trigger_type == 'cron' else include_zero_demand
                 created, critical, had_errors = self._generate_for_company(
-                    company, config, warehouse_ids, include_zero_demand,
+                    company, config, warehouse_ids, comp_include_zero,
                     t_start, CRON_TIMEOUT_SECS, warehouse_by_location, URGENCY_RANK, log,
                 )
                 total_created  += created
@@ -797,6 +833,31 @@ class SmartReorderSuggestion(models.Model):
                 if planned_dt and planned_dt.date() < date.today():
                     overdue_map.setdefault(pid, []).append((net_qty, planned_dt))
 
+        # ── Q3c: Incoming internal transfers (confirmed, not yet done) ──
+        # A transfer already on its way from a donor warehouse must count
+        # toward incoming quantity here too, or the next run can suggest
+        # buying stock that is already en route. `product_qty` on a
+        # non-done move is the still-undelivered remainder (Odoo splits off
+        # a done move for whatever portion has already arrived), same
+        # convention as Q3b below — no separate subtraction needed.
+        transfer_in_data = self.env['stock.move'].sudo().read_group(
+            domain=[
+                ('state',            'in', ['confirmed', 'waiting', 'assigned', 'partially_available']),
+                ('location_dest_id', 'child_of', warehouse.lot_stock_id.id),
+                '!', ('location_id', 'child_of', warehouse.lot_stock_id.id),
+                ('location_id.usage', '=', 'internal'),
+                ('product_id',       'in', product_ids_with_sales),
+                ('company_id',       '=', company.id),
+            ],
+            fields=['product_id', 'product_qty:sum'],
+            groupby=['product_id'],
+        )
+        for r in transfer_in_data:
+            qty = r.get('product_qty') or 0.0
+            if qty > 0.0:
+                pid = r['product_id'][0]
+                incoming_map[pid] = incoming_map.get(pid, 0.0) + qty
+
         # ── Q3b: Outgoing customer reservations ──
         outgoing_data = self.env['stock.move'].sudo().read_group(
             domain=[
@@ -816,7 +877,11 @@ class SmartReorderSuggestion(models.Model):
         }
 
         # ── Q4: Product cost + template_id ──
-        products = self.env['product.product'].sudo().browse(product_ids_with_sales)
+        # standard_price is a company-dependent property field — it must be read
+        # within the context of the company being analyzed, or it silently
+        # resolves to whichever company's cost record the ORM defaults to
+        # (wrong price and reorder value in a multi-company setup).
+        products = self.env['product.product'].with_company(company).sudo().browse(product_ids_with_sales)
         product_lookup = {p.id: p for p in products}
         cost_map = {p.id: p.standard_price for p in products}
         tmpl_map = {p.id: p.product_tmpl_id.id for p in products}
@@ -1008,7 +1073,7 @@ class SmartReorderSuggestion(models.Model):
         tmpl_suppliers, primary_vendor_info, actual_avg_days,
         overdue_lines, predecessors, predecessor_names,
         global_stocks, global_sales, lane_lead_times,
-        partner_names_map, currency_convert_fn
+        partner_names_map, currency_convert_fn, reorder_behavior='system'
     ):
         from .reorder_engine import calculate_product_suggestion
         return calculate_product_suggestion(
@@ -1019,7 +1084,7 @@ class SmartReorderSuggestion(models.Model):
             tmpl_suppliers, primary_vendor_info, actual_avg_days,
             overdue_lines, predecessors, predecessor_names,
             global_stocks, global_sales, lane_lead_times,
-            partner_names_map, currency_convert_fn
+            partner_names_map, currency_convert_fn, reorder_behavior
         )
 
     def _generate_for_company(self, company, config, warehouse_ids, include_zero_demand,
@@ -1145,6 +1210,7 @@ class SmartReorderSuggestion(models.Model):
                         'alt_vendor_lead_margin_days': config.alt_vendor_lead_margin_days,
                         'abc_a_threshold': config.abc_a_threshold,
                         'abc_b_threshold': config.abc_b_threshold,
+                        'min_spike_size': config.min_spike_size,
                         'overstock_ceiling_months': config.overstock_ceiling_months,
                         'transfer_surplus_threshold': config.transfer_surplus_threshold,
                         'default_internal_transfer_days': config.default_internal_transfer_days,
@@ -1227,7 +1293,8 @@ class SmartReorderSuggestion(models.Model):
                             global_sales=global_sales,
                             lane_lead_times=lane_lead_time_map,
                             partner_names_map=partner_names_map,
-                            currency_convert_fn=currency_convert_fn
+                            currency_convert_fn=currency_convert_fn,
+                            reorder_behavior=product.reorder_behavior
                         )
 
                         u_rank = URGENCY_RANK.get(vals['urgency'], 5)
@@ -1259,6 +1326,34 @@ class SmartReorderSuggestion(models.Model):
                             write_vals = dict(vals)
                             write_vals['prior_suggested_qty'] = old_qty
                             write_vals['delta_pct']           = self._calc_delta_pct(old_qty, new_qty)
+
+                            # Draft PO guard: a draft PO already created from this
+                            # suggestion (action_create_draft_po) is still open.
+                            # Don't silently re-arm reorder_needed or re-propose
+                            # the same quantity from scratch — that's what invited
+                            # a second draft PO for one shortage. Surface it
+                            # instead: suppress the qty/flag and name the draft PO.
+                            open_draft_pos = existing_rec.po_ids.filtered(lambda po: po.state == 'draft')
+                            draft_po_note = False
+                            if open_draft_pos:
+                                draft_lines = []
+                                for po in open_draft_pos:
+                                    po_qty = sum(po.order_line.filtered(
+                                        lambda l: l.product_id.id == pid
+                                    ).mapped('product_qty'))
+                                    draft_lines.append(f'{po.name} ({po_qty:.0f} units)')
+                                draft_po_note = (
+                                    'Draft PO already created: ' + ', '.join(draft_lines) +
+                                    '. Confirm or cancel it before a new suggestion is proposed.'
+                                )
+                                write_vals['suggested_reorder_qty'] = 0.0
+                                write_vals['raw_reorder_qty']       = 0.0
+                                write_vals['reorder_needed']        = False
+
+                            # Skip bulk-concentration flag when buyer confirmed bulk-regular
+                            _bulk_conc = write_vals.get('has_bulk_concentration', False)
+                            if write_vals.get('reorder_behavior') == 'bulk_regular':
+                                _bulk_conc = False
                             write_vals['needs_review'], write_vals['needs_review_reason'] = (
                                 self._compute_needs_review(
                                     write_vals['avg_monthly_demand'], write_vals['suggested_reorder_qty'],
@@ -1266,8 +1361,16 @@ class SmartReorderSuggestion(models.Model):
                                     config.needs_review_delta_threshold,
                                     write_vals.get('months_of_stock_after_order', 0.0),
                                     config.overstock_ceiling_months,
+                                    write_vals.get('sales_pattern', False),
+                                    _bulk_conc,
                                 )
                             )
+                            if draft_po_note:
+                                write_vals['needs_review'] = True
+                                write_vals['needs_review_reason'] = (
+                                    draft_po_note + ' ' + (write_vals['needs_review_reason'] or '')
+                                ).strip()
+                                write_vals['notes'] = f'⚠️ {draft_po_note}\n\n' + (write_vals.get('notes') or '')
                             write_vals['active'] = True
                             if existing_rec.snoozed_until:
                                 write_vals.pop('snoozed_until', None)
@@ -1278,12 +1381,18 @@ class SmartReorderSuggestion(models.Model):
                         else:
                             vals['prior_suggested_qty'] = 0.0
                             vals['delta_pct'] = self._calc_delta_pct(0.0, vals['suggested_reorder_qty'])
+                            # Skip bulk-concentration flag when buyer confirmed bulk-regular
+                            _bulk_conc_new = vals.get('has_bulk_concentration', False)
+                            if vals.get('reorder_behavior') == 'bulk_regular':
+                                _bulk_conc_new = False
                             vals['needs_review'], vals['needs_review_reason'] = self._compute_needs_review(
                                 vals['avg_monthly_demand'], vals['suggested_reorder_qty'],
                                 vals['is_dead_stock'], vals['delta_pct'],
                                 config.needs_review_delta_threshold,
                                 vals.get('months_of_stock_after_order', 0.0),
                                 config.overstock_ceiling_months,
+                                vals.get('sales_pattern', False),
+                                _bulk_conc_new,
                             )
                             to_create.append(vals)
 
@@ -1295,16 +1404,35 @@ class SmartReorderSuggestion(models.Model):
                         total_created += 1
 
                     Snapshot = self.env['smart.reorder.forecast.snapshot'].sudo()
+                    
+                    # Skip-if-pending rule: fetch product IDs that have unevaluated snapshots for this company/warehouse
+                    existing_pending_pids = set(Snapshot.search([
+                        ('company_id', '=', company.id),
+                        ('warehouse_id', '=', warehouse.id),
+                        ('evaluated', '=', False)
+                    ]).mapped('product_id.id'))
+
                     snapshots_to_create = []
                     for _, _, _, vals in suggestion_values:
+                        pid = vals['product_id']
+                        if pid in existing_pending_pids:
+                            continue
+
+                        # Snapshot scope filtering
+                        scope = getattr(config, 'snapshot_scope', 'ab_only')
+                        if scope == 'ab_only' and vals.get('abc_class') not in ('A', 'B'):
+                            continue
+                        elif scope == 'reorder_only' and not vals.get('reorder_needed'):
+                            continue
+
                         snapshots_to_create.append({
                             'company_id':       company.id,
                             'warehouse_id':     warehouse.id,
-                            'product_id':       vals['product_id'],
+                            'product_id':       pid,
                             'snapshot_date':    date.today(),
                             'forecast_demand':  vals['avg_monthly_demand'],
                             'confidence':       vals['confidence'],
-                            'lead_time_days':   int(vals['lead_time_months'] * 30),
+                            'lead_time_days':   max(1, int(vals['lead_time_months'] * 30)),
                             'abc_class':        vals['abc_class'],
                             'evaluated':        False,
                         })
@@ -1452,7 +1580,9 @@ class SmartReorderSuggestion(models.Model):
         if not config.auto_flag_on_negative:
             return
 
-        product = self.env['product.product'].sudo().browse(product_id)
+        # standard_price is company-dependent — must be read in the context of
+        # the company being flagged, or it can resolve to the wrong company's cost.
+        product = self.env['product.product'].with_company(company_id).sudo().browse(product_id)
         location  = self.env['stock.warehouse'].sudo().browse(warehouse_id).lot_stock_id
         quants    = self.env['stock.quant'].sudo().search([
             ('product_id',  '=', product_id),
@@ -1724,8 +1854,21 @@ class SmartReorderSuggestion(models.Model):
         Only the small, bounded "top 10" lists still fetch actual rows — each is
         its own scoped search_read() with an explicit order and limit.
         """
-        Suggestion = self.sudo()
-        base_domain = [('warehouse_id', '=', warehouse_id)] if warehouse_id else []
+        # Scope every query in this method to the calling user's allowed
+        # companies, matching controllers/main.py's banner pattern. This method
+        # used to run everything under sudo() with no company filter at all —
+        # any Reorder User could pull KPIs, top-10 lists, and back-test accuracy
+        # across every company in the database, bypassing the module's own
+        # record rules (rule_suggestion_company etc.). Sudo is kept only where a
+        # Reorder User genuinely lacks read access to the underlying model
+        # (stock.warehouse) — never as a substitute for the company filter,
+        # which is applied unconditionally below regardless of sudo.
+        company_ids = self.env.companies.ids
+        Suggestion = self  # no sudo: rely on the model's own ACL + record rule,
+                           # reinforced by the explicit company filter below
+        base_domain = [('company_id', 'in', company_ids)]
+        if warehouse_id:
+            base_domain.append(('warehouse_id', '=', warehouse_id))
 
         # ── Counts, grouped DB-side (one SQL GROUP BY each, no record loading) ──
         urgency_counts = {
@@ -1798,12 +1941,15 @@ class SmartReorderSuggestion(models.Model):
             ),
         }
 
-        # Backtest forecast scoring aggregation (Feature 15)
-        backtest_domain = [('evaluated', '=', True)]
+        # Backtest forecast scoring aggregation (Feature 15). No company record
+        # rule exists on smart.reorder.forecast.snapshot, so the company filter
+        # must be explicit here — it is not a safety net, it is the only guard.
+        Snapshot = self.env['smart.reorder.forecast.snapshot']
+        backtest_domain = [('evaluated', '=', True), ('company_id', 'in', company_ids)]
         if warehouse_id:
             backtest_domain.append(('warehouse_id', '=', warehouse_id))
-        
-        abc_groups = self.env['smart.reorder.forecast.snapshot'].sudo().read_group(
+
+        abc_groups = Snapshot.read_group(
             backtest_domain,
             ['absolute_error_pct:avg'],
             ['abc_class']
@@ -1812,9 +1958,9 @@ class SmartReorderSuggestion(models.Model):
             (g['abc_class'] or 'Unknown'): round(g['absolute_error_pct'] or 0.0, 1)
             for g in abc_groups
         }
-        
-        wh_groups = self.env['smart.reorder.forecast.snapshot'].sudo().read_group(
-            [('evaluated', '=', True)],
+
+        wh_groups = Snapshot.read_group(
+            [('evaluated', '=', True), ('company_id', 'in', company_ids)],
             ['absolute_error_pct:avg'],
             ['warehouse_id']
         )
@@ -1822,8 +1968,8 @@ class SmartReorderSuggestion(models.Model):
             (g['warehouse_id'][1] if g['warehouse_id'] else 'Unknown'): round(g['absolute_error_pct'] or 0.0, 1)
             for g in wh_groups
         }
-        
-        overall_group = self.env['smart.reorder.forecast.snapshot'].sudo().read_group(
+
+        overall_group = Snapshot.read_group(
             backtest_domain,
             ['absolute_error_pct:avg'],
             []
@@ -1836,8 +1982,12 @@ class SmartReorderSuggestion(models.Model):
             'overall_mape': overall_mape,
         }
 
+        # A Reorder User may lack direct Inventory access to stock.warehouse,
+        # so sudo is kept here for the read itself — but the company filter
+        # still applies unconditionally, so it can never surface a warehouse
+        # from a company outside the caller's allowed set.
         warehouses = self.env['stock.warehouse'].sudo().search_read(
-            [], ['id','name','company_id'], limit=50)
+            [('company_id', 'in', company_ids)], ['id', 'name', 'company_id'], limit=50)
         return {
             'urgency': urgency_counts, 'abc': abc_counts, 'trend': trend_counts,
             'total_reorder_value': total_rv, 'within_budget_value': budget_rv,
@@ -1936,4 +2086,100 @@ class SmartReorderSuggestion(models.Model):
                 ('picking_id.picking_type_id.warehouse_id', '=', self.warehouse_id.id),
                 ('state', '=', 'done'),
             ],
+        }
+
+    def action_mark_one_time_order(self):
+        """Manager-only. Writes the behavior flag to the product and updates ONLY
+        this suggestion record in place — no full company/warehouse regeneration.
+        A synchronous full re-run from a form button froze the screen for minutes
+        on large catalogs, mislabeled Run History as a scheduled run, and could be
+        silently skipped if the weekly cron held the per-company lock."""
+        self.ensure_one()
+        if not self.env.user.has_group('smart_reorder_advisor.group_smart_reorder_manager'):
+            raise UserError(_('Only Reorder Managers can change how this part is ordered.'))
+
+        self.product_id.product_tmpl_id.reorder_behavior = 'against_order'
+        self.message_post(body=_("Marked as 'Order Only Against Customer Order'. Suggestion suppressed."))
+
+        urgency = self._determine_urgency(
+            self.qty_on_hand, self.months_of_stock, self.avg_monthly_demand,
+            self.lead_time_months, self.is_dead_stock, 0.0,
+        )
+        self.write({
+            'raw_reorder_qty':       0.0,
+            'suggested_reorder_qty': 0.0,
+            'reorder_needed':        self.qty_on_hand < 0,
+            'urgency':               urgency,
+            'needs_review':          False,
+            'needs_review_reason':   _(
+                'Cleared: marked as one-time order by %(user)s on %(date)s.'
+            ) % {'user': self.env.user.name, 'date': date.today()},
+        })
+        return {
+            'type': 'ir.actions.client',
+            'tag': 'display_notification',
+            'params': {
+                'title':   _('Suggestion Updated'),
+                'message': _('Reorder quantity suppressed for this part.'),
+                'type':    'success',
+                'sticky':  False,
+            },
+        }
+
+    def action_mark_regular_order(self):
+        """Manager-only. Recomputes THIS product's forecast/qty locally from figures
+        already stored on the record (total_qty_sold, analysis_months, lead/safety/
+        order-cycle months, MOQ, stock position) — the same plain-average formula
+        the engine uses for reorder_behavior == 'bulk_regular' — instead of
+        triggering a full company/warehouse regeneration. See action_mark_one_time_order."""
+        self.ensure_one()
+        if not self.env.user.has_group('smart_reorder_advisor.group_smart_reorder_manager'):
+            raise UserError(_('Only Reorder Managers can change how this part is ordered.'))
+
+        self.product_id.product_tmpl_id.reorder_behavior = 'bulk_regular'
+        self.message_post(body=_(
+            "Marked as 'Customer Buys in Bulk Regularly'. Forecast recalculated using "
+            "the plain monthly average (outlier rejection bypassed)."
+        ))
+
+        avg_monthly = (self.total_qty_sold / self.analysis_months) if self.analysis_months else 0.0
+        min_level = avg_monthly * (self.lead_time_months + self.safety_buffer_months)
+        max_level = min_level + avg_monthly * self.order_cycle_months
+        is_triggered = (self.qty_available < min_level) or (self.qty_on_hand < 0)
+        raw_qty = max(0.0, max_level - self.qty_available) if is_triggered else 0.0
+        suggested_qty = self._round_to_moq(raw_qty, self.moq)
+        months_of_stock = self._calc_months_of_stock(self.qty_available, avg_monthly)
+        urgency = self._determine_urgency(
+            self.qty_on_hand, months_of_stock, avg_monthly,
+            self.lead_time_months, self.is_dead_stock, suggested_qty,
+        )
+
+        self.write({
+            'avg_monthly_demand':      avg_monthly,
+            'excluded_outlier_months': 0,
+            'demand_forecast_note':    _(
+                'Plain monthly average — outlier rejection bypassed '
+                '(Customer Buys in Bulk Regularly).'
+            ),
+            'min_stock_level':      min_level,
+            'max_stock_level':      max_level,
+            'raw_reorder_qty':      raw_qty,
+            'suggested_reorder_qty': suggested_qty,
+            'reorder_needed':       suggested_qty > 0 or self.qty_on_hand < 0,
+            'urgency':              urgency,
+            'sales_pattern':        'regular',
+            'needs_review':         False,
+            'needs_review_reason':  _(
+                'Cleared: marked as regular bulk order by %(user)s on %(date)s.'
+            ) % {'user': self.env.user.name, 'date': date.today()},
+        })
+        return {
+            'type': 'ir.actions.client',
+            'tag': 'display_notification',
+            'params': {
+                'title':   _('Forecast Updated'),
+                'message': _('Recalculated using the plain monthly average. Suggested reorder qty: %s.') % suggested_qty,
+                'type':    'success',
+                'sticky':  False,
+            },
         }

@@ -141,7 +141,19 @@ class SmartReorderConfig(models.Model):
     abc_b_threshold = fields.Float(
         string='B-Class: Min Monthly Demand',
         default=1.0,
-        help='Products selling >= this qty/month are B (Medium). Below = C (Slow/Dead).'
+        help='Products selling >= this qty/month are B (Medium). Below = C (Slow Mover).'
+    )
+
+    # ── One-Time Spike Detection ──────────────────────────────────────────────
+    min_spike_size = fields.Float(
+        string='Minimum One-Time Spike Size',
+        default=10.0,
+        help='A single month of sales can only be excluded as a one-time bulk-order '
+             'spike if its quantity is at least this many units. Prevents a lone small '
+             'sale (e.g. a part that sold once in the window) from being zeroed out and '
+             'flagged as "One-Time Big Order Only" just because every other month is zero. '
+             'Raise this for catalogs with large one-off orders; lower it if genuine small '
+             'spikes are being averaged in and inflating the forecast.'
     )
 
     # ── Vendor Performance (Phase 3) ──────────────────────────────────────────
@@ -175,9 +187,17 @@ class SmartReorderConfig(models.Model):
         help='Minimum lead time difference in days to suggest an alternative vendor. Set to 0 to disable.'
     )
 
+    snapshot_scope = fields.Selection([
+        ('all', 'All Products'),
+        ('ab_only', 'A+B Class Only'),
+        ('reorder_only', 'Reorder-Needed Only'),
+    ], string='Back-testing Snapshot Scope', default='ab_only', required=True,
+       help='Which products to create back-testing snapshots for. '
+            'A+B Class Only is recommended to reduce database volume.')
+
     snapshot_retention_months = fields.Integer(
         string='Snapshot Retention (Months)',
-        default=12,
+        default=6,
         help='Purge forecast snapshots older than this many months. Set to 0 to keep forever.'
     )
 
@@ -193,6 +213,12 @@ class SmartReorderConfig(models.Model):
         help='Used when recommending an internal transfer and no specific transfer lane is configured between the warehouses.'
     )
 
+
+    cron_include_zero_demand = fields.Boolean(
+        string='Include Zero-Sales in Scheduled Runs',
+        default=True,
+        help='If checked, weekly scheduled runs will also analyse products with NO sales (needed to detect dead stock automatically).'
+    )
 
     # ── Scheduling (T-32) ──────────────────────────────────────────────────────
     cron_frequency = fields.Selection([
@@ -286,6 +312,12 @@ class SmartReorderConfig(models.Model):
         for rec in self:
             if rec.abc_a_threshold <= rec.abc_b_threshold:
                 raise ValidationError(_('A-class threshold must be higher than B-class threshold.'))
+
+    @api.constrains('min_spike_size')
+    def _check_min_spike_size(self):
+        for rec in self:
+            if rec.min_spike_size < 0:
+                raise ValidationError(_('Minimum One-Time Spike Size cannot be negative.'))
 
     _CRON_FREQUENCY_INTERVALS = {
         'weekly':   (1, 'weeks'),

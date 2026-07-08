@@ -36,7 +36,7 @@
                 <div class="page" style="font-family: 'DejaVu Sans', sans-serif; font-size: 11px;">
 
                     <!-- FIX 6: Pre-declare label dicts ONCE per doc, not via fields_get() per record -->
-                    <t t-set="abc_labels" t-value="{'A': 'A - Fast Mover', 'B': 'B - Medium Mover', 'C': 'C - Slow / Dead'}"/>
+                    <t t-set="abc_labels" t-value="{'A': 'A - Fast Mover', 'B': 'B - Medium Mover', 'C': 'C - Slow Mover'}"/>
                     <t t-set="urgency_labels" t-value="{
                         'critical': 'Critical - Negative Stock',
                         'urgent':   'Urgent - Below Lead Time',

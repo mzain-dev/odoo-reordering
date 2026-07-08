@@ -38,9 +38,17 @@
                        decoration-danger="demand_trend == 'down'"
                        decoration-muted="demand_trend in ('stable','new')"
                        optional="show"/>
+                <field name="sales_pattern"    widget="badge"
+                       decoration-success="sales_pattern == 'regular'"
+                       decoration-info="sales_pattern == 'sometimes'"
+                       decoration-warning="sales_pattern == 'big_order_mixed'"
+                       decoration-danger="sales_pattern == 'one_time_big_order'"
+                       decoration-muted="sales_pattern == 'new'"
+                       optional="show"/>
 
                 <field name="company_id"       groups="base.group_multi_company" optional="show"/>
                 <field name="warehouse_id"     optional="show"/>
+                <field name="analysis_date"    string="Analysis Date" optional="show"/>
                 <field name="default_code"     string="Part No."/>
                 <field name="product_id"/>
                 <field name="superseded_by_id" optional="hide"/>
@@ -90,14 +98,15 @@
                 <field name="transfer_suggested_qty" string="Transfer Qty" optional="show"/>
                 <field name="transfer_lead_time_days" string="Transfer Lead (Days)" optional="hide"/>
 
+                <field name="draft_po_ref" string="Draft PO" optional="show"
+                       decoration-warning="draft_po_ref"/>
+
                 <field name="stale_reason"     string="Stale Reason" optional="hide"/>
                 <field name="needs_review_reason" string="Review Reason" optional="hide"/>
 
                 <field name="reorder_needed"   invisible="1"/>
                 <field name="urgency_rank"     invisible="1"/>
                 <field name="currency_id"      invisible="1"/>
-                <field name="analysis_date"    optional="hide"/>
-
             </tree>
         </field>
     </record>
@@ -146,6 +155,18 @@
                             string="📦 Stock Moves"
                             type="object"
                             class="btn-secondary"/>
+                    <button name="action_mark_one_time_order"
+                            string="❌ This Was a One-Time Order"
+                            type="object"
+                            class="btn-warning"
+                            invisible="not needs_review"
+                            groups="smart_reorder_advisor.group_smart_reorder_manager"/>
+                    <button name="action_mark_regular_order"
+                            string="🔄 Customer Orders This Regularly"
+                            type="object"
+                            class="btn-primary"
+                            invisible="not needs_review"
+                            groups="smart_reorder_advisor.group_smart_reorder_manager"/>
                 </header>
 
                 <sheet>
@@ -167,6 +188,12 @@
                                    decoration-success="demand_trend == 'up'"
                                    decoration-danger="demand_trend == 'down'"
                                    decoration-muted="demand_trend in ('stable','new')"/>
+                            <field name="sales_pattern" widget="badge"
+                                   decoration-success="sales_pattern == 'regular'"
+                                   decoration-info="sales_pattern == 'sometimes'"
+                                   decoration-warning="sales_pattern == 'big_order_mixed'"
+                                   decoration-danger="sales_pattern == 'one_time_big_order'"
+                                   decoration-muted="sales_pattern == 'new'"/>
                         </div>
                         <h1><field name="product_id" readonly="1"/></h1>
                         <h3>
@@ -222,6 +249,14 @@
                          invisible="within_budget">
                         💰 This item exceeds the configured weekly budget cap.
                         It is ranked #<field name="budget_rank" readonly="1"/> in priority order.
+                    </div>
+
+                    <div class="alert alert-warning" role="alert"
+                         invisible="not draft_po_ref">
+                        📋 <strong>DRAFT PO PENDING:</strong>
+                        <field name="draft_po_ref" readonly="1" nolabel="1" class="oe_inline"/>.
+                        Reorder suggestions are held until it is confirmed or cancelled —
+                        see the Calculation Breakdown below for details.
                     </div>
 
                     <div class="alert alert-success" role="alert"
@@ -299,6 +334,7 @@
                                     <field name="safety_buffer_months" readonly="1"/>
                                     <field name="moq" readonly="1"/>
                                     <field name="product_cost" readonly="1"/>
+                                    <field name="reorder_behavior" widget="radio" readonly="1"/>
                                 </group>
                             </group>
                             <group string="Monthly Demand Analysis">
@@ -321,6 +357,7 @@
                             <group string="Demand Trend">
                                 <group>
                                     <field name="demand_trend" readonly="1"/>
+                                    <field name="sales_pattern" readonly="1"/>
                                     <field name="trend_pct" readonly="1" string="Change %"/>
                                     <field name="prev_period_qty_sold" readonly="1"/>
                                 </group>
@@ -373,6 +410,10 @@
                                           font-size:12px; line-height:1.6;"/>
                         </page>
 
+                        <page string="🛍️ Draft Orders" invisible="not po_ids">
+                            <field name="po_ids"/>
+                        </page>
+
                         <page string="🧠 Snooze">
                             <group string="Snooze Settings">
                                 <group>
@@ -419,6 +460,7 @@
                 <field name="vendor_id"/>
                 <field name="months_of_stock"/>
                 <field name="default_code"/>
+                <field name="sales_pattern"/>
                 <progressbar field="urgency"
                              colors='{"critical": "danger", "urgent": "warning", "normal": "info", "dead": "muted", "ok": "success"}'/>
                 <templates>
@@ -445,6 +487,14 @@
                                        record.abc_class.raw_value == 'B' ? 'bg-warning text-dark' : 'bg-secondary' }"
                                     style="font-size:10px;">
                                     <t t-esc="record.abc_class.value"/>
+                                </span>
+                                <span t-attf-class="badge
+                                    #{ record.sales_pattern.raw_value == 'regular' ? 'bg-success' :
+                                       record.sales_pattern.raw_value == 'sometimes' ? 'bg-info' :
+                                       record.sales_pattern.raw_value == 'big_order_mixed' ? 'bg-warning text-dark' :
+                                       record.sales_pattern.raw_value == 'one_time_big_order' ? 'bg-danger' : 'bg-secondary' }"
+                                    style="font-size:10px;">
+                                    <t t-esc="record.sales_pattern.value"/>
                                 </span>
                             </div>
                             <div style="font-size:12px; line-height:1.8;">
@@ -507,7 +557,7 @@
                         domain="[('abc_class','=','A')]"/>
                 <filter name="medium_movers"   string="🔶 B — Medium Movers"
                         domain="[('abc_class','=','B')]"/>
-                <filter name="slow_movers"     string="🐢 C — Slow/Dead"
+                <filter name="slow_movers"     string="🐢 C — Slow Mover"
                         domain="[('abc_class','=','C')]"/>
 
                 <separator/>
@@ -516,6 +566,18 @@
                         domain="[('demand_trend','=','up')]"/>
                 <filter name="falling"         string="↓ Falling Demand"
                         domain="[('demand_trend','=','down')]"/>
+
+                <separator/>
+                <filter name="pattern_regular"            string="Sells Regularly"
+                        domain="[('sales_pattern','=','regular')]"/>
+                <filter name="pattern_sometimes"          string="Sells Sometimes"
+                        domain="[('sales_pattern','=','sometimes')]"/>
+                <filter name="pattern_big_order_mixed"    string="Big Order Mixed In"
+                        domain="[('sales_pattern','=','big_order_mixed')]"/>
+                <filter name="pattern_one_time_big_order" string="One-Time Big Order Only"
+                        domain="[('sales_pattern','=','one_time_big_order')]"/>
+                <filter name="pattern_new"                string="New — No Sales History"
+                        domain="[('sales_pattern','=','new')]"/>
 
                 <separator/>
                 <filter name="today"           string="Today's Analysis"
@@ -534,6 +596,8 @@
                             context="{'group_by':'abc_class'}"/>
                     <filter name="gb_trend"     string="Demand Trend"
                             context="{'group_by':'demand_trend'}"/>
+                    <filter name="gb_sales_pattern" string="Sales Pattern"
+                            context="{'group_by':'sales_pattern'}"/>
                     <filter name="gb_category"  string="Product Category"
                             context="{'group_by':'product_categ_id'}"/>
                     <filter name="gb_vendor"    string="Vendor"
@@ -549,7 +613,7 @@
         <field name="res_model">smart.reorder.suggestion</field>
         <field name="view_mode">kanban,tree,form</field>
         <field name="search_view_id" ref="view_smart_reorder_suggestion_search"/>
-        <field name="context">{'search_default_reorder_needed': 1}</field>
+        <field name="context">{'search_default_reorder_needed': 1, 'search_default_gb_warehouse': 1}</field>
     </record>
 
     <record id="action_smart_reorder_all" model="ir.actions.act_window">
@@ -557,6 +621,7 @@
         <field name="res_model">smart.reorder.suggestion</field>
         <field name="view_mode">tree,form</field>
         <field name="search_view_id" ref="view_smart_reorder_suggestion_search"/>
+        <field name="context">{'search_default_gb_warehouse': 1}</field>
     </record>
 
     <record id="action_smart_reorder_critical" model="ir.actions.act_window">

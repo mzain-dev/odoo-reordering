@@ -33,6 +33,8 @@ class SmartReorderDashboard extends Component {
             deadStockCount: 0,
             // Phase 2: Trend
             trendUp: 0, trendDown: 0, trendStable: 0,
+            // Sales Patterns
+            patternRegular: 0, patternSometimes: 0, patternMixed: 0, patternOneTime: 0, patternNew: 0,
             // Top tables
             topCritical: [], topUrgent: [], topDead: [],
             topRising: [], topFalling: [],
@@ -57,6 +59,7 @@ class SmartReorderDashboard extends Component {
                 [], { warehouse_id: this.state.selectedWarehouse || false }
             );
             const u = d.urgency;
+            const p = d.sales_pattern || {};
             Object.assign(this.state, {
                 critical: u.critical||0, urgent: u.urgent||0,
                 normal: u.normal||0, ok: u.ok||0, dead: u.dead||0,
@@ -64,6 +67,11 @@ class SmartReorderDashboard extends Component {
                 abc_a: d.abc.A||0, abc_b: d.abc.B||0, abc_c: d.abc.C||0,
                 trendUp: d.trend.up||0, trendDown: d.trend.down||0,
                 trendStable: d.trend.stable||0,
+                patternRegular: p.regular||0,
+                patternSometimes: p.sometimes||0,
+                patternMixed: p.big_order_mixed||0,
+                patternOneTime: p.one_time_big_order||0,
+                patternNew: p.new||0,
                 totalReorderValue: d.total_reorder_value,
                 withinBudgetValue: d.within_budget_value,
                 budgetCount: d.budget_count,
@@ -112,6 +120,11 @@ class SmartReorderDashboard extends Component {
     openBudget()     { this.openList([["within_budget","=",true],["reorder_needed","=",true]], "💰 Within Budget"); }
     openRising()     { this.openList([["demand_trend","=","up"]], "↑ Rising Demand"); }
     openFalling()    { this.openList([["demand_trend","=","down"]], "↓ Falling Demand"); }
+    openRegular()    { this.openList([["sales_pattern","=","regular"]], "🟢 Sells Regularly"); }
+    openSometimes()  { this.openList([["sales_pattern","=","sometimes"]], "🔵 Sells Sometimes"); }
+    openMixed()      { this.openList([["sales_pattern","=","big_order_mixed"]], "🔶 Big Order Mixed In"); }
+    openOneTime()    { this.openList([["sales_pattern","=","one_time_big_order"]], "🔴 One-Time Big Order Only"); }
+    openNew()        { this.openList([["sales_pattern","=","new"]], "⚪ New — No Sales History"); }
     openRunWizard()  { this.action.doAction("smart_reorder_advisor.action_generate_suggestions_wizard"); }
     openBacktest() {
         this.action.doAction({

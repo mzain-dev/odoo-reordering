@@ -197,3 +197,25 @@ All records are company-scoped via record rules — users in company A cannot se
 - The cron frequency setting is system-wide (one `ir.cron` record). If multiple companies save different frequencies, the last save wins.
 - Excel export requires `openpyxl` to be installed in the Odoo server's Python environment (`pip install openpyxl`). The rest of the module functions normally without it.
 - The inter-warehouse transfer lead time is informational — it is factored into coverage calculations but does not create inter-company transfers automatically.
+
+---
+
+## Release Process
+
+**Test execution is a mandatory gate — no zip/merge ships without it.** A regression once shipped where the test suite asserted an outcome the code could not produce, which only happens if the suite was never actually run before packaging. Tests nobody runs protect nothing.
+
+1. **CI must be green.** Every push and PR runs `.github/workflows/tests.yml` (lint, then `--test-enable --test-tags=smart_reorder_advisor` against a fresh Odoo 17 + Postgres 15 service). This is enforced automatically and blocks merge on any lint or test failure — do not merge with a red or skipped CI run, and do not bypass branch protection to do so.
+2. **Before cutting a release zip, additionally run the suite against a staging build restored from a recent production backup**, not just the CI's fresh test database:
+
+   ```bash
+   python odoo-bin --addons-path=<odoo-addons>,. \
+     -d <staging_db_restored_from_prod> \
+     -u smart_reorder_advisor \
+     --test-enable --test-tags=smart_reorder_advisor \
+     --stop-after-init --no-http --log-level=test
+   ```
+
+   Production-shaped data (multi-company records, large snapshot backlogs, real vendor/supplier configs) catches issues a clean test DB won't. Any `FAILED`/`ERROR` in the output is a release blocker — fix it or roll the change back out of the release, do not ship around it.
+3. Only after both (1) and (2) are green does the module zip get packaged and merged/deployed.
+
+The test suite itself must earn this gate by actually catching regressions — see `tests/test_reorder_suggestion.py` for the module's regression coverage, including: the one-time-sale review-flag scenario, single-month low-quantity (1–3 unit) averaging, bulk-regular products skipping the concentration review flag *and* confidence deduction, the draft-PO no-double-order guard, in-transit internal transfers counting as incoming stock, and dashboard multi-company access isolation.

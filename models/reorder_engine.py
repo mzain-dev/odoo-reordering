@@ -83,10 +83,15 @@ def calc_seasonal_note(current_qty, ly_qty):
     return f'≈ Consistent with same period last year ({pct:+.0f}%)'
 
 
-def compute_robust_monthly_demand(monthly_series):
+def compute_robust_monthly_demand(monthly_series, min_spike_size=10.0):
     """
     Forecast monthly demand from a most-recent-first list of monthly quantities
     using average + MAD (median absolute deviation) outlier rejection.
+
+    min_spike_size: a month can only be classified as a one-time spike (and
+    excluded) if its quantity is at least this large. Prevents a single small
+    sale (e.g. 1 unit sold once) from being treated as a "4x the next-highest
+    month" spike merely because the next-highest month is zero.
     """
     if not monthly_series:
         return 0.0, 0, None, []
@@ -96,10 +101,32 @@ def compute_robust_monthly_demand(monthly_series):
     mad = statistics.median(distances)
 
     if mad == 0:
-        forecast = sum(monthly_series) / len(monthly_series)
-        excluded_count = 0
-        direction = None
-        excluded_flags = [False] * len(monthly_series)
+        total_sales = sum(monthly_series)
+        is_spike = False
+        if total_sales > 0.0:
+            max_val = max(monthly_series)
+            max_idx = monthly_series.index(max_val)
+            other_months = [x for idx, x in enumerate(monthly_series) if idx != max_idx]
+            next_highest = max(other_months) if other_months else 0.0
+            is_spike = (
+                max_val >= min_spike_size
+                and max_val >= 0.5 * total_sales
+                and max_val >= 4 * max(next_highest, 1.0)
+            )
+
+        if is_spike:
+            max_idx = monthly_series.index(max_val)
+            clean = [x for idx, x in enumerate(monthly_series) if idx != max_idx]
+            forecast = sum(clean) / len(clean) if clean else 0.0
+            excluded_count = 1
+            direction = 'high'
+            excluded_flags = [False] * len(monthly_series)
+            excluded_flags[max_idx] = True
+        else:
+            forecast = sum(monthly_series) / len(monthly_series)
+            excluded_count = 0
+            direction = None
+            excluded_flags = [False] * len(monthly_series)
     else:
         excluded_flags = [x - med > 3 * mad for x in monthly_series]
         clean    = [x for x, ex in zip(monthly_series, excluded_flags) if not ex]
@@ -115,7 +142,7 @@ def compute_robust_monthly_demand(monthly_series):
             direction = 'high'
 
     total_sales = sum(monthly_series)
-    if forecast == 0.0 and total_sales > 0.0:
+    if forecast == 0.0 and total_sales > 0.0 and excluded_count == 0:
         forecast = total_sales / len(monthly_series)
 
     return forecast, excluded_count, direction, excluded_flags
@@ -128,7 +155,8 @@ def calc_delta_pct(old_qty, new_qty):
 
 
 def compute_needs_review(avg_monthly, suggested_qty, is_dead_stock, delta_pct, delta_threshold,
-                         mos_after_order=0.0, overstock_ceiling_months=0.0):
+                         mos_after_order=0.0, overstock_ceiling_months=0.0, sales_pattern=False,
+                         has_bulk_concentration=False):
     reasons = []
     if delta_threshold > 0 and abs(delta_pct) > delta_threshold:
         reasons.append(
@@ -144,17 +172,23 @@ def compute_needs_review(avg_monthly, suggested_qty, is_dead_stock, delta_pct, d
             f'Vendor MOQ forces {mos_after_order:.1f} months of cover '
             f'(ceiling {overstock_ceiling_months:.1f} months).'
         )
+    if sales_pattern == 'one_time_big_order':
+        reasons.append('One-time big order detected — replenishment has been suppressed.')
+    if has_bulk_concentration:
+        reasons.append('Single month carries half or more of total demand (verify whether this bulk order repeats).')
     return (bool(reasons), ' '.join(reasons))
 
 
-def compute_confidence_score(monthly_series, excluded_months):
+def compute_confidence_score(monthly_series, excluded_months, reorder_behavior='system'):
     ZERO_MONTH_PENALTY     = 5
     OUTLIER_MONTH_PENALTY  = 15
     NEW_PRODUCT_PENALTY    = 10
+    CONCENTRATION_PENALTY  = 30
 
     total_months    = len(monthly_series)
     zero_months     = sum(1 for x in monthly_series if x == 0)
     non_zero_months = total_months - zero_months
+    total_sales     = sum(monthly_series)
 
     score = 100.0
     reasons = []
@@ -175,6 +209,18 @@ def compute_confidence_score(monthly_series, excluded_months):
             f'Very limited sales history — only {non_zero_months} month(s) with any '
             f'sales (-{NEW_PRODUCT_PENALTY}).'
         )
+    is_concentrated = total_sales > 0 and any(m >= 0.5 * total_sales for m in monthly_series)
+    if is_concentrated:
+        if reorder_behavior == 'bulk_regular':
+            reasons.append(
+                'Demand concentrated in a single month, but no penalty applied — '
+                'buyer confirmed the product as "Customer Buys in Bulk Regularly".'
+            )
+        else:
+            score -= CONCENTRATION_PENALTY
+            reasons.append(
+                f'Demand heavily concentrated in a single month (-{CONCENTRATION_PENALTY}).'
+            )
 
     score = max(0.0, min(100.0, score))
     reason = ' '.join(reasons) if reasons else 'Full clean history — no deductions.'
@@ -209,17 +255,43 @@ def calculate_product_suggestion(
     tmpl_suppliers, primary_vendor_info, actual_avg_days,
     overdue_lines, predecessors, predecessor_names,
     global_stocks, global_sales, lane_lead_times,
-    partner_names_map, currency_convert_fn
+    partner_names_map, currency_convert_fn, reorder_behavior='system'
 ):
-    avg_monthly, excluded_months, excluded_direction, excluded_flags = (
-        compute_robust_monthly_demand(monthly_series)
-    )
+    if reorder_behavior == 'bulk_regular':
+        avg_monthly = sum(monthly_series) / len(monthly_series) if monthly_series else 0.0
+        excluded_months = 0
+        excluded_direction = False
+        excluded_flags = [False] * len(monthly_series)
+    else:
+        avg_monthly, excluded_months, excluded_direction, excluded_flags = (
+            compute_robust_monthly_demand(
+                monthly_series,
+                min_spike_size=config_data.get('min_spike_size', 10.0),
+            )
+        )
     qty_available  = qty_on_hand + qty_incoming - qty_outgoing
     total_sold     = sum(monthly_series)
+    has_bulk_concentration = total_sold > 0 and any(m >= 0.5 * total_sold for m in monthly_series)
+    clean_total_sold = sum(x for x, ex in zip(monthly_series, excluded_flags) if not ex)
     analysis_months = dates['analysis_months']
     comparison_months = dates['comparison_months']
     date_from = dates['date_from']
     date_to   = dates['date_to']
+
+    # Sales Pattern classification
+    if total_sold == 0.0:
+        sales_pattern = 'new'
+    elif excluded_months > 0:
+        if clean_total_sold > 0.0:
+            sales_pattern = 'big_order_mixed'
+        else:
+            sales_pattern = 'one_time_big_order'
+    else:
+        active_months = sum(1 for x in monthly_series if x > 0.0)
+        if active_months >= len(monthly_series) / 2.0:
+            sales_pattern = 'regular'
+        else:
+            sales_pattern = 'sometimes'
 
     # Vendor info
     if primary_vendor_info:
@@ -336,6 +408,11 @@ def calculate_product_suggestion(
             alt_vendor_id_val = fastest_alt_vendor_id
             alt_vendor_lead_days_val = fastest_alt_lead_days
 
+    # Suppress automatic reorder quantity for "One-Time Big Order Only" parts
+    # or if behavior is "Order Only Against Customer Order"
+    if sales_pattern == 'one_time_big_order' or reorder_behavior == 'against_order':
+        suggested_qty = 0.0
+
     reorder_needed = suggested_qty > 0 or qty_on_hand < 0
 
     class DictWrapper(object):
@@ -343,11 +420,20 @@ def calculate_product_suggestion(
             self.__dict__ = d
 
     if is_superseded:
-        is_dead = True
         suggested_qty = 0.0
         reorder_needed = False
-        urgency = 'dead'
         abc_class = 'C'
+        if qty_on_hand < 0:
+            # Negative stock is promised or shipped stock that doesn't exist —
+            # that must never be hidden under a "Dead Stock" label, even for a
+            # superseded part. No replenishment of this (superseded) part is
+            # still suggested; the shortfall must be resolved via the
+            # successor or a stock correction, not by reordering this SKU.
+            is_dead = False
+            urgency = 'critical'
+        else:
+            is_dead = True
+            urgency = 'dead'
     else:
         abc_class = classify_abc(avg_monthly, DictWrapper(config_data))
         urgency = determine_urgency(
@@ -397,7 +483,7 @@ def calculate_product_suggestion(
     )
 
     ly_qty_val = ly_qty or 0.0
-    seasonal_note = calc_seasonal_note(total_sold, ly_qty_val)
+    seasonal_note = calc_seasonal_note(clean_total_sold, ly_qty_val)
 
     reorder_value = suggested_qty * cost
     est_purchase_val = suggested_qty * price_company_currency
@@ -428,7 +514,7 @@ def calculate_product_suggestion(
     )
 
     confidence, confidence_note = compute_confidence_score(
-        monthly_series, excluded_months
+        monthly_series, excluded_months, reorder_behavior
     )
 
     mos_after_order = 0.0
@@ -442,18 +528,24 @@ def calculate_product_suggestion(
     notes_lines = [
         '══ DEMAND ANALYSIS ══',
         f'Period: {date_from} → {date_to} ({analysis_months} months)',
-        f'Total sold: {total_sold:.2f}  |  Avg monthly: {avg_monthly:.2f} units/month',
+        f'Total sold: {clean_total_sold:.2f}  |  Avg monthly: {avg_monthly:.2f} units/month',
         f'Forecast method: monthly average with spike rejection — {demand_forecast_note}',
         f'Per-month breakdown: {month_breakdown_text}',
         f'Current month-to-date sales (informational): {current_month_sales:.2f} units',
         f'Confidence: {confidence:.0f}/100 — {confidence_note}',
         '',
         '══ STOCK POSITION ══',
-        f'On hand: {qty_on_hand:.2f}  |  Incoming PO: {qty_incoming:.2f}',
+        f'On hand: {qty_on_hand:.2f}  |  Incoming (PO + transfers): {qty_incoming:.2f}',
         f'Outgoing (reserved for customers): {qty_outgoing:.2f}',
         f'Net available: {qty_available:.2f}  |  Months of stock: {months_of_stock:.1f}',
         f'Months left after order: {mos_after_order:.1f}' if avg_monthly > 0 else 'Months left after order: —',
     ]
+    if reorder_behavior == 'against_order':
+        notes_lines = [
+            '📝 ORDER ONLY AGAINST CUSTOMER ORDER — Replenishment is suppressed.',
+            ''
+        ] + notes_lines
+
     if overdue_lines:
         overdue_qty = sum(item[0] for item in overdue_lines)
         oldest_dt = min(item[1] for item in overdue_lines).date()
@@ -471,15 +563,28 @@ def calculate_product_suggestion(
     ]
 
     if qty_on_hand < 0:
-        notes_lines = ['⚠️ NEGATIVE STOCK — CRITICAL', ''] + notes_lines
+        notes_lines = [
+            '⚠️ NEGATIVE STOCK — CRITICAL',
+            '⚠️ Note: The cost figure may be temporarily distorted because average cost (AVCO) is affected by negative stock until the correcting receipt is posted.',
+            ''
+        ] + notes_lines
     if is_dead:
         notes_lines = [f'💀 DEAD STOCK — {months_since} months without sale', ''] + notes_lines
 
     if is_superseded:
-        notes_lines = [
-            f'⚠️ SUPERSEDED: This part has been superseded by successor {successor_display_name}. No replenishment suggested; consume or transfer remaining stock.',
-            ''
-        ] + notes_lines
+        if qty_on_hand < 0:
+            notes_lines = [
+                f'⚠️ SUPERSEDED WITH NEGATIVE STOCK: This part has been superseded by successor '
+                f'{successor_display_name}, but on-hand is negative. No replenishment of this '
+                f'superseded part is suggested — resolve the shortfall via the successor part '
+                f'or a stock correction.',
+                ''
+            ] + notes_lines
+        else:
+            notes_lines = [
+                f'⚠️ SUPERSEDED: This part has been superseded by successor {successor_display_name}. No replenishment suggested; consume or transfer remaining stock.',
+                ''
+            ] + notes_lines
 
     if predecessors:
         pred_names_str = ', '.join(predecessor_names)
@@ -560,5 +665,7 @@ def calculate_product_suggestion(
         'transfer_lead_time_days':  transfer_lead_time_days,
         'transfer_suggested_qty':   transfer_capped_qty,
         'notes':                    '\n'.join(notes_lines),
+        'sales_pattern':            sales_pattern,
+        'has_bulk_concentration':   has_bulk_concentration,
     }
     return vals

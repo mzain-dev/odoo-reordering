@@ -10,6 +10,13 @@ class ProductTemplate(models.Model):
         help='If checked, this product will be ignored by the Smart Reorder Advisor.'
     )
 
+    reorder_behavior = fields.Selection([
+        ('system', 'Let the System Decide'),
+        ('against_order', 'Order Only Against Customer Order'),
+        ('bulk_regular', 'Customer Buys in Bulk Regularly'),
+    ], string='How to Order This Part', default='system', required=True,
+       help='Determines how the forecasting engine should treat this part.')
+
     superseded_by_id = fields.Many2one(
         'product.template',
         string='Superseded By',

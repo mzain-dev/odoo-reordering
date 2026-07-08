@@ -114,7 +114,7 @@
             <div class="sra_abc_legend">
                 <span class="leg_a">■ A Fast (<t t-esc="state.abc_a"/>)</span>
                 <span class="leg_b">■ B Medium (<t t-esc="state.abc_b"/>)</span>
-                <span class="leg_c">■ C Slow/Dead (<t t-esc="state.abc_c"/>)</span>
+                <span class="leg_c">■ C Slow Mover (<t t-esc="state.abc_c"/>)</span>
             </div>
         </div>
 
@@ -135,6 +135,36 @@
                 <div class="sra_trend_icon">↓</div>
                 <div class="sra_trend_val"><t t-esc="state.trendDown"/></div>
                 <div class="sra_trend_lbl">Falling Demand</div>
+            </div>
+        </div>
+
+        <!-- ── SECTION: SALES PATTERN STATUS ── -->
+        <div class="sra_section_label">📋 Sales Pattern Status</div>
+        <div class="sra_pattern_row">
+            <div class="sra_trend_card sra_pattern_regular" t-on-click="openRegular">
+                <div class="sra_trend_icon">🟢</div>
+                <div class="sra_trend_val"><t t-esc="state.patternRegular"/></div>
+                <div class="sra_trend_lbl">Sells Regularly</div>
+            </div>
+            <div class="sra_trend_card sra_pattern_sometimes" t-on-click="openSometimes">
+                <div class="sra_trend_icon">🔵</div>
+                <div class="sra_trend_val"><t t-esc="state.patternSometimes"/></div>
+                <div class="sra_trend_lbl">Sells Sometimes</div>
+            </div>
+            <div class="sra_trend_card sra_pattern_mixed" t-on-click="openMixed">
+                <div class="sra_trend_icon">🔶</div>
+                <div class="sra_trend_val"><t t-esc="state.patternMixed"/></div>
+                <div class="sra_trend_lbl">Big Order Mixed In</div>
+            </div>
+            <div class="sra_trend_card sra_pattern_one_time" t-on-click="openOneTime">
+                <div class="sra_trend_icon">🔴</div>
+                <div class="sra_trend_val"><t t-esc="state.patternOneTime"/></div>
+                <div class="sra_trend_lbl">One-Time Big Order Only</div>
+            </div>
+            <div class="sra_trend_card sra_pattern_new" t-on-click="openNew">
+                <div class="sra_trend_icon">⚪</div>
+                <div class="sra_trend_val"><t t-esc="state.patternNew"/></div>
+                <div class="sra_trend_lbl">New — No History</div>
             </div>
         </div>
 

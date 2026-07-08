@@ -13,6 +13,7 @@
             <xpath expr="//page[@name='inventory']" position="inside">
                 <group string="Smart Reorder Advisor">
                     <field name="exclude_from_reorder_advisor"/>
+                    <field name="reorder_behavior" widget="radio"/>
                 </group>
             </xpath>
             <xpath expr="//page[@name='purchase']" position="inside">

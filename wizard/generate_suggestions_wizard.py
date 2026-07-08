@@ -80,15 +80,22 @@ class GenerateSuggestionsWizard(models.TransientModel):
             trigger_type='manual',
         )
 
+        domain = []
+        if self.scope == 'warehouse' and self.warehouse_ids:
+            domain = [('warehouse_id', 'in', self.warehouse_ids.ids)]
+        elif self.scope == 'company' and self.company_ids:
+            domain = [('company_id', 'in', self.company_ids.ids)]
+
         # Show result summary and redirect to suggestions
         return {
             'type': 'ir.actions.act_window',
             'name': 'Reorder Suggestions',
             'res_model': 'smart.reorder.suggestion',
             'view_mode': 'list,form',
-            'domain': [],
+            'domain': domain,
             'context': {
                 'default_company_id': self.env.company.id,
                 'search_default_reorder_needed': 1,
+                'search_default_gb_warehouse': 1,
             },
         }

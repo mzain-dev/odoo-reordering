@@ -150,8 +150,11 @@ class TestReorderCalculations(TransactionCase):
         self.assertEqual(flags, [False] * 6)
 
     def test_robust_demand_zero_mad_fallback(self):
-        # [0, 0, 0, 5, 0] has median 0.0 and MAD 0.0.
-        # It must return the true mathematical average (1.0) instead of the median (0.0).
+        # [0, 0, 0, 5, 0] has median 0.0 and MAD 0.0. The lone 5-unit month holds
+        # 100% of total sales and the next-highest month is 0, so the ratio test
+        # alone would call it a spike. But it falls below the default minimum
+        # spike size (10 units), so it is NOT excluded — a single small sale
+        # must not be zeroed out and flagged as a one-time bulk order.
         forecast, excluded, direction, flags = self.Suggestion._compute_robust_monthly_demand(
             [0.0, 0.0, 0.0, 5.0, 0.0]
         )
@@ -160,16 +163,102 @@ class TestReorderCalculations(TransactionCase):
         self.assertIsNone(direction)
         self.assertEqual(flags, [False] * 5)
 
+    def test_robust_demand_single_month_one_unit_not_spike(self):
+        # A part that sold exactly 1 unit in one month out of the window and
+        # nothing else must NOT be zeroed out as a "one-time big order" —
+        # it's a normal slow/rare mover, not a bulk-order spike.
+        forecast, excluded, direction, flags = self.Suggestion._compute_robust_monthly_demand(
+            [0.0, 0.0, 0.0, 1.0, 0.0]
+        )
+        self.assertEqual(forecast, 0.2)
+        self.assertEqual(excluded, 0)
+        self.assertIsNone(direction)
+        self.assertEqual(flags, [False] * 5)
+
+    def test_robust_demand_single_month_three_units_not_spike(self):
+        forecast, excluded, direction, flags = self.Suggestion._compute_robust_monthly_demand(
+            [0.0, 0.0, 0.0, 3.0, 0.0]
+        )
+        self.assertEqual(forecast, 0.6)
+        self.assertEqual(excluded, 0)
+        self.assertIsNone(direction)
+        self.assertEqual(flags, [False] * 5)
+
+    def test_robust_demand_single_month_large_qty_still_spike(self):
+        # A genuine 2000-unit one-off bulk order (well above the default
+        # minimum spike size) must still be quarantined as a spike.
+        forecast, excluded, direction, flags = self.Suggestion._compute_robust_monthly_demand(
+            [0.0, 0.0, 0.0, 2000.0, 0.0]
+        )
+        self.assertEqual(forecast, 0.0)
+        self.assertEqual(excluded, 1)
+        self.assertEqual(direction, 'high')
+        self.assertEqual(flags, [False, False, False, True, False])
+
+    def test_robust_demand_min_spike_size_is_configurable(self):
+        # Lowering min_spike_size below the sale quantity flips a small
+        # single-month sale back into spike territory, proving the threshold
+        # is actually wired through rather than hardcoded.
+        forecast, excluded, direction, flags = self.Suggestion._compute_robust_monthly_demand(
+            [0.0, 0.0, 0.0, 5.0, 0.0], min_spike_size=1.0
+        )
+        self.assertEqual(forecast, 0.0)
+        self.assertEqual(excluded, 1)
+        self.assertEqual(direction, 'high')
+        self.assertEqual(flags, [False, False, False, True, False])
+
+    def test_robust_demand_zero_mad_no_bulk_order(self):
+        # [0, 0, 0, 5, 5] has median 0.0 and MAD 0.0.
+        # Zero count is 3 (>= 2.5), but max month (5.0) is only 5.0 / 10.0 = 50% (< 75%) of total sales.
+        # So it is NOT treated as a bulk order, and falls back to the raw average (2.0).
+        forecast, excluded, direction, flags = self.Suggestion._compute_robust_monthly_demand(
+            [0.0, 0.0, 0.0, 5.0, 5.0]
+        )
+        self.assertEqual(forecast, 2.0)
+        self.assertEqual(excluded, 0)
+        self.assertIsNone(direction)
+        self.assertEqual(flags, [False] * 5)
+
     def test_robust_demand_safety_net(self):
         # Clean months [-2.0, 0.0, 2.0] average to 0.0, but total sales (100.0) is > 0.0.
-        # It must fall back to the true average of all months (25.0) instead of returning 0.0.
+        # Since the safety net fallback was removed, it must return the clean average of 0.0.
         forecast, excluded, direction, flags = self.Suggestion._compute_robust_monthly_demand(
             [-2.0, 0.0, 2.0, 100.0]
         )
-        self.assertEqual(forecast, 25.0)
+        self.assertEqual(forecast, 0.0)
         self.assertEqual(excluded, 1)
         self.assertEqual(direction, 'high')
         self.assertEqual(flags, [False, False, False, True])
+
+    def test_robust_demand_one_off_bulk_order_exclusion(self):
+        # Case A: meets both conditions: at least half zero (3/5), single largest (150) is >= 75% of total sales (100%).
+        forecast, excluded, direction, flags = self.Suggestion._compute_robust_monthly_demand(
+            [0.0, 0.0, 0.0, 150.0, 0.0]
+        )
+        self.assertEqual(forecast, 0.0)
+        self.assertEqual(excluded, 1)
+        self.assertEqual(direction, 'high')
+        self.assertEqual(flags, [False, False, False, True, False])
+
+        # Case B: meets zero condition (3/5) but largest (100) is only 100/150 = 66.7% (< 75%) of total sales.
+        # No exclusion, falls back to raw average (150/5 = 30).
+        forecast, excluded, direction, flags = self.Suggestion._compute_robust_monthly_demand(
+            [0.0, 0.0, 0.0, 100.0, 50.0]
+        )
+        self.assertEqual(forecast, 30.0)
+        self.assertEqual(excluded, 0)
+        self.assertIsNone(direction)
+        self.assertEqual(flags, [False] * 5)
+
+        # Case C: largest (150) is >= 75% of total, but zeros are only 2 out of 5 (40% < 50%).
+        # In this case mad != 0, so it uses standard MAD logic to exclude the outlier.
+        forecast, excluded, direction, flags = self.Suggestion._compute_robust_monthly_demand(
+            [0.0, 20.0, 30.0, 150.0, 0.0]
+        )
+        self.assertEqual(forecast, 12.5)
+        self.assertEqual(excluded, 1)
+        self.assertEqual(direction, 'high')
+        self.assertEqual(flags, [False, False, False, True, False])
 
     def test_robust_demand_empty_series(self):
         forecast, excluded, direction, flags = self.Suggestion._compute_robust_monthly_demand([])
@@ -177,6 +266,28 @@ class TestReorderCalculations(TransactionCase):
         self.assertEqual(excluded, 0)
         self.assertIsNone(direction)
         self.assertEqual(flags, [])
+
+    def test_robust_demand_fallback_spike_test(self):
+        # Spike holds >= 50% total sales AND is >= 4 times larger than the next-highest month.
+        # [0, 0, 2, 150, 0, 0] has total sales 152. Max 150 holds 98.7% of total sales.
+        # Next-highest is 2. 150 >= 8 (4*2). Treated as spike!
+        forecast, excluded, direction, flags = self.Suggestion._compute_robust_monthly_demand(
+            [0.0, 0.0, 2.0, 150.0, 0.0, 0.0]
+        )
+        self.assertEqual(forecast, 0.4)
+        self.assertEqual(excluded, 1)
+        self.assertEqual(direction, 'high')
+        self.assertEqual(flags, [False, False, False, True, False, False])
+
+        # [0, 2000, 0, 0, 0, 0] has total sales 2000. Max 2000 holds 100% of total sales.
+        # Next highest is 0. 2000 >= 0 (4*0). Treated as spike!
+        forecast, excluded, direction, flags = self.Suggestion._compute_robust_monthly_demand(
+            [0.0, 2000.0, 0.0, 0.0, 0.0, 0.0]
+        )
+        self.assertEqual(forecast, 0.0)
+        self.assertEqual(excluded, 1)
+        self.assertEqual(direction, 'high')
+        self.assertEqual(flags, [False, True, False, False, False, False])
 
     def test_calc_delta_pct(self):
         m = self.Suggestion._calc_delta_pct
@@ -283,6 +394,29 @@ class TestReorderCalculations(TransactionCase):
             monthly_series=[4.0, 5.0, 6.0, 5.0, 4.0, 5.0], excluded_months=0
         )
         self.assertLessEqual(score, 100.0)
+
+    def test_confidence_score_deducts_concentration_by_default(self):
+        # One month holds exactly 50% of total sales — concentration penalty
+        # applies for the default ("Let the System Decide") behavior.
+        score, reason = self.Suggestion._compute_confidence_score(
+            monthly_series=[50.0, 10.0, 10.0, 10.0, 10.0, 10.0], excluded_months=0
+        )
+        self.assertEqual(score, 70.0, '1 concentrated month x 30-point penalty = -30')
+        self.assertIn('Demand heavily concentrated in a single month (-30)', reason)
+
+    def test_confidence_score_skips_concentration_for_bulk_regular(self):
+        # Same concentrated series, but the buyer has confirmed the product as
+        # "Customer Buys in Bulk Regularly" — the concentration is expected,
+        # confirmed behavior, so no penalty should apply, and the note should
+        # say so instead of silently omitting the deduction.
+        score, reason = self.Suggestion._compute_confidence_score(
+            monthly_series=[50.0, 10.0, 10.0, 10.0, 10.0, 10.0], excluded_months=0,
+            reorder_behavior='bulk_regular',
+        )
+        self.assertEqual(score, 100.0, 'no deduction once the concentration is buyer-confirmed')
+        self.assertNotIn('-30', reason)
+        self.assertIn('no penalty applied', reason)
+        self.assertIn('Customer Buys in Bulk Regularly', reason)
 
     def test_config_order_cycle_validation(self):
         with self.assertRaises(ValidationError):
@@ -687,6 +821,131 @@ class TestPoWizardSecurityGuard(TransactionCase):
 
 
 @tagged('post_install', '-at_install')
+class TestMarkButtonsSecurityGuard(TransactionCase):
+    """action_mark_one_time_order() / action_mark_regular_order() must reject
+    non-managers before touching the product template, mirroring the guard on
+    action_create_draft_po() / action_create_internal_transfer()."""
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls.company = cls.env.company
+        cls.env['smart.reorder.config'].create({'company_id': cls.company.id})
+        user_group = cls.env.ref('smart_reorder_advisor.group_smart_reorder_user')
+        cls.basic_user = cls.env['res.users'].create({
+            'name': 'Basic Reorder User',
+            'login': 'basic_reorder_user_mark_test',
+            'groups_id': [(6, 0, [cls.env.ref('base.group_user').id, user_group.id])],
+        })
+        cls.warehouse = cls.env['stock.warehouse'].search(
+            [('company_id', '=', cls.company.id)], limit=1
+        )
+        if not cls.warehouse:
+            cls.warehouse = cls.env['stock.warehouse'].create({
+                'name': 'Test Warehouse',
+                'code': 'TWH3',
+                'company_id': cls.company.id,
+            })
+        cls.product = cls.env['product.product'].create({
+            'name': 'Mark Button Guard Widget',
+            'type': 'product',
+            'standard_price': 1.0,
+        })
+        cls.suggestion = cls.env['smart.reorder.suggestion'].create({
+            'company_id':   cls.company.id,
+            'warehouse_id': cls.warehouse.id,
+            'product_id':   cls.product.id,
+            'needs_review': True,
+        })
+
+    def test_non_manager_cannot_mark_one_time_order(self):
+        product_tmpl = self.product.product_tmpl_id
+        with self.assertRaises(UserError):
+            self.suggestion.with_user(self.basic_user).action_mark_one_time_order()
+        # The guard must fire before the product template is touched.
+        self.assertEqual(product_tmpl.reorder_behavior, 'system')
+
+    def test_non_manager_cannot_mark_regular_order(self):
+        product_tmpl = self.product.product_tmpl_id
+        with self.assertRaises(UserError):
+            self.suggestion.with_user(self.basic_user).action_mark_regular_order()
+        self.assertEqual(product_tmpl.reorder_behavior, 'system')
+
+
+@tagged('post_install', '-at_install')
+class TestDashboardSingleCompanyUserAccess(TransactionCase):
+    """Fix 13 / Fix 5: get_dashboard_data() must be scoped by the calling
+    user's OWN allowed companies. Unlike test_dashboard_multi_company_security
+    (which uses with_context(allowed_company_ids=...) on an otherwise
+    unrestricted admin env), this uses a genuinely single-company res.users
+    record — company_ids restricted to one company — and calls the method
+    with_user(), so env.companies resolves from the user's real access
+    rather than an explicit context override. Proves the scoping is real
+    access control, not just a UI-layer convenience filter."""
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls.company_a = cls.env.company
+        cls.company_b = cls.env['res.company'].create({'name': 'Dashboard Access Test Company B'})
+
+        cls.warehouse_a = cls.env['stock.warehouse'].search(
+            [('company_id', '=', cls.company_a.id)], limit=1
+        )
+        if not cls.warehouse_a:
+            cls.warehouse_a = cls.env['stock.warehouse'].create({
+                'name': 'Dash Access WH A', 'code': 'DAWA', 'company_id': cls.company_a.id,
+            })
+        cls.warehouse_b = cls.env['stock.warehouse'].create({
+            'name': 'Dash Access WH B', 'code': 'DAWB', 'company_id': cls.company_b.id,
+        })
+
+        product_a = cls.env['product.product'].create({'name': 'Dash Access Widget A', 'type': 'product'})
+        product_b = cls.env['product.product'].create({'name': 'Dash Access Widget B', 'type': 'product'})
+
+        cls.env['smart.reorder.suggestion'].create({
+            'company_id': cls.company_a.id, 'warehouse_id': cls.warehouse_a.id,
+            'product_id': product_a.id, 'urgency': 'ok', 'abc_class': 'C', 'sales_pattern': 'new',
+        })
+        cls.suggestion_b = cls.env['smart.reorder.suggestion'].create({
+            'company_id': cls.company_b.id, 'warehouse_id': cls.warehouse_b.id,
+            'product_id': product_b.id, 'urgency': 'critical', 'abc_class': 'A',
+            'sales_pattern': 'new', 'reorder_needed': True, 'suggested_reorder_qty': 5.0,
+            'vendor_price': 100.0,
+        })
+
+        user_group = cls.env.ref('smart_reorder_advisor.group_smart_reorder_user')
+        cls.single_company_user = cls.env['res.users'].create({
+            'name': 'Single Company Dashboard User',
+            'login': 'single_company_dashboard_user',
+            'groups_id': [(6, 0, [cls.env.ref('base.group_user').id, user_group.id])],
+            'company_id': cls.company_a.id,
+            'company_ids': [(6, 0, [cls.company_a.id])],
+        })
+
+    def test_single_company_user_cannot_see_other_company_dashboard_figures(self):
+        data = self.env['smart.reorder.suggestion'].with_user(
+            self.single_company_user
+        ).get_dashboard_data()
+
+        self.assertEqual(
+            data['urgency'].get('critical', 0), 0,
+            "a single-company user must not see another company's critical count"
+        )
+        self.assertNotIn(
+            self.warehouse_b.id, [w['id'] for w in data['warehouses']],
+            "a single-company user must not see another company's warehouse"
+        )
+        self.assertEqual(data['total_reorder_value'], 0.0)
+        for lst in data['top'].values():
+            self.assertNotIn(
+                self.suggestion_b.product_id.id,
+                [r['product_id'][0] for r in lst],
+                "a single-company user's top lists must not include the other company's product"
+            )
+
+
+@tagged('post_install', '-at_install')
 class TestRobustDemandForecast(TransactionCase):
     """End-to-end: generate_suggestions() must forecast off the robust average + MAD
     monthly breakdown, not a plain total/N average, so one freak bulk-order
@@ -812,6 +1071,841 @@ class TestRobustDemandForecast(TransactionCase):
         ])
         self.assertEqual(len(suggestion), 1)
         self.assertEqual(suggestion.total_qty_sold, 10.0, "Today's sales must be fully included")
+
+    def test_regression_series_1_spike_safe(self):
+        # 0, 0, 2, 150, 0, 0 -> forecast 0.4/month, suggestion ~2 units, big_order_mixed
+        prod = self.env['product.product'].create({
+            'name': 'Test Regression Widget 1',
+            'type': 'product',
+            'standard_price': 1.0,
+        })
+        self.config.write({
+            'safety_buffer_months': 1.0,
+            'default_lead_time_months': 1.5,
+            'order_cycle_months': 1.0,
+        })
+        qtys = [0.0, 0.0, 2.0, 150.0, 0.0, 0.0]
+        for month_start, qty in zip(self.month_starts, qtys):
+            if qty > 0.0:
+                order_date = datetime.combine(month_start + timedelta(days=4), datetime.min.time())
+                order = self.env['sale.order'].create({
+                    'partner_id': self.partner.id,
+                    'company_id': self.company.id,
+                    'warehouse_id': self.warehouse.id,
+                    'date_order': order_date,
+                    'order_line': [(0, 0, {
+                        'product_id': prod.id,
+                        'product_uom_qty': qty,
+                        'price_unit': 10.0,
+                    })],
+                })
+                order.action_confirm()
+                order.order_line.qty_delivered = qty
+
+        self.Suggestion.generate_suggestions(
+            company_ids=[self.company.id], warehouse_ids=[self.warehouse.id]
+        )
+        suggestion = self.Suggestion.search([
+            ('product_id', '=', prod.id),
+            ('warehouse_id', '=', self.warehouse.id),
+        ])
+        self.assertEqual(len(suggestion), 1)
+        self.assertAlmostEqual(suggestion.avg_monthly_demand, 0.4)
+        self.assertEqual(suggestion.sales_pattern, 'big_order_mixed')
+        self.assertEqual(suggestion.suggested_reorder_qty, 2.0)
+
+    def test_regression_series_2_one_time_sale(self):
+        # 0, 2000, 0, 0, 0, 0 -> forecast 0, suggestion 0, flagged for review (one_time_big_order)
+        prod = self.env['product.product'].create({
+            'name': 'Test Regression Widget 2',
+            'type': 'product',
+            'standard_price': 1.0,
+        })
+        self.config.write({
+            'safety_buffer_months': 1.0,
+            'default_lead_time_months': 1.5,
+            'order_cycle_months': 1.0,
+        })
+        qtys = [0.0, 2000.0, 0.0, 0.0, 0.0, 0.0]
+        for month_start, qty in zip(self.month_starts, qtys):
+            if qty > 0.0:
+                order_date = datetime.combine(month_start + timedelta(days=4), datetime.min.time())
+                order = self.env['sale.order'].create({
+                    'partner_id': self.partner.id,
+                    'company_id': self.company.id,
+                    'warehouse_id': self.warehouse.id,
+                    'date_order': order_date,
+                    'order_line': [(0, 0, {
+                        'product_id': prod.id,
+                        'product_uom_qty': qty,
+                        'price_unit': 10.0,
+                    })],
+                })
+                order.action_confirm()
+                order.order_line.qty_delivered = qty
+
+        self.Suggestion.generate_suggestions(
+            company_ids=[self.company.id], warehouse_ids=[self.warehouse.id]
+        )
+        suggestion = self.Suggestion.search([
+            ('product_id', '=', prod.id),
+            ('warehouse_id', '=', self.warehouse.id),
+        ])
+        self.assertEqual(len(suggestion), 1)
+        self.assertEqual(suggestion.avg_monthly_demand, 0.0)
+        self.assertEqual(suggestion.sales_pattern, 'one_time_big_order')
+        self.assertEqual(suggestion.suggested_reorder_qty, 0.0)
+        self.assertTrue(suggestion.needs_review)
+
+    def test_regression_series_3_single_small_sale_not_one_time_order(self):
+        # 0, 0, 0, 1, 0, 0 -> a C-class part that sold once. Must NOT be treated
+        # as a one-time bulk order: forecast stays a normal small average and the
+        # pattern lands in "Sells Sometimes", not "One-Time Big Order Only".
+        prod = self.env['product.product'].create({
+            'name': 'Test Regression Widget 3',
+            'type': 'product',
+            'standard_price': 1.0,
+        })
+        self.config.write({
+            'safety_buffer_months': 1.0,
+            'default_lead_time_months': 1.5,
+            'order_cycle_months': 1.0,
+        })
+        qtys = [0.0, 0.0, 0.0, 1.0, 0.0, 0.0]
+        for month_start, qty in zip(self.month_starts, qtys):
+            if qty > 0.0:
+                order_date = datetime.combine(month_start + timedelta(days=4), datetime.min.time())
+                order = self.env['sale.order'].create({
+                    'partner_id': self.partner.id,
+                    'company_id': self.company.id,
+                    'warehouse_id': self.warehouse.id,
+                    'date_order': order_date,
+                    'order_line': [(0, 0, {
+                        'product_id': prod.id,
+                        'product_uom_qty': qty,
+                        'price_unit': 10.0,
+                    })],
+                })
+                order.action_confirm()
+                order.order_line.qty_delivered = qty
+
+        self.Suggestion.generate_suggestions(
+            company_ids=[self.company.id], warehouse_ids=[self.warehouse.id]
+        )
+        suggestion = self.Suggestion.search([
+            ('product_id', '=', prod.id),
+            ('warehouse_id', '=', self.warehouse.id),
+        ])
+        self.assertEqual(len(suggestion), 1)
+        self.assertAlmostEqual(suggestion.avg_monthly_demand, 1.0 / 6.0)
+        self.assertEqual(suggestion.sales_pattern, 'sometimes')
+        self.assertEqual(suggestion.excluded_outlier_months, 0)
+
+    def test_reorder_behavior_against_order(self):
+        prod = self.env['product.product'].create({
+            'name': 'Against Order Widget',
+            'type': 'product',
+            'standard_price': 1.0,
+        })
+        prod.product_tmpl_id.reorder_behavior = 'against_order'
+
+        # Generate some sales history
+        order = self.env['sale.order'].create({
+            'partner_id': self.partner.id,
+            'company_id': self.company.id,
+            'warehouse_id': self.warehouse.id,
+            'date_order': datetime.combine(self.month_starts[0] + timedelta(days=4), datetime.min.time()),
+            'order_line': [(0, 0, {
+                'product_id': prod.id,
+                'product_uom_qty': 10.0,
+                'price_unit': 10.0,
+            })],
+        })
+        order.action_confirm()
+
+        self.Suggestion.generate_suggestions(
+            company_ids=[self.company.id], warehouse_ids=[self.warehouse.id]
+        )
+        suggestion = self.Suggestion.search([
+            ('product_id', '=', prod.id),
+            ('warehouse_id', '=', self.warehouse.id),
+        ])
+        self.assertEqual(len(suggestion), 1)
+        self.assertEqual(suggestion.suggested_reorder_qty, 0.0)
+        self.assertIn("ORDER ONLY AGAINST CUSTOMER ORDER", suggestion.notes)
+
+    def test_reorder_behavior_bulk_regular(self):
+        prod = self.env['product.product'].create({
+            'name': 'Regular Bulk Widget',
+            'type': 'product',
+            'standard_price': 1.0,
+        })
+        prod.product_tmpl_id.reorder_behavior = 'bulk_regular'
+
+        qtys = [0.0, 0.0, 2.0, 150.0, 0.0, 0.0]
+        for month_start, qty in zip(self.month_starts, qtys):
+            if qty > 0.0:
+                order = self.env['sale.order'].create({
+                    'partner_id': self.partner.id,
+                    'company_id': self.company.id,
+                    'warehouse_id': self.warehouse.id,
+                    'date_order': datetime.combine(month_start + timedelta(days=4), datetime.min.time()),
+                    'order_line': [(0, 0, {
+                        'product_id': prod.id,
+                        'product_uom_qty': qty,
+                        'price_unit': 10.0,
+                    })],
+                })
+                order.action_confirm()
+                order.order_line.qty_delivered = qty
+
+        self.Suggestion.generate_suggestions(
+            company_ids=[self.company.id], warehouse_ids=[self.warehouse.id]
+        )
+        suggestion = self.Suggestion.search([
+            ('product_id', '=', prod.id),
+            ('warehouse_id', '=', self.warehouse.id),
+        ])
+        self.assertEqual(len(suggestion), 1)
+        # Average is sum(qtys)/len(qtys) = 152 / 6 = 25.333...
+        self.assertAlmostEqual(suggestion.avg_monthly_demand, 25.33, places=2)
+        self.assertEqual(suggestion.excluded_outlier_months, 0)
+
+    def test_one_click_mark_buttons(self):
+        prod = self.env['product.product'].create({
+            'name': 'One Click Test Widget',
+            'type': 'product',
+            'standard_price': 1.0,
+        })
+        # Standard generation (which will flag as outlier review)
+        order = self.env['sale.order'].create({
+            'partner_id': self.partner.id,
+            'company_id': self.company.id,
+            'warehouse_id': self.warehouse.id,
+            'date_order': datetime.combine(self.month_starts[0] + timedelta(days=4), datetime.min.time()),
+            'order_line': [(0, 0, {
+                'product_id': prod.id,
+                'product_uom_qty': 2000.0,
+                'price_unit': 10.0,
+            })],
+        })
+        order.action_confirm()
+        order.order_line.qty_delivered = 2000.0
+
+        self.Suggestion.generate_suggestions(
+            company_ids=[self.company.id], warehouse_ids=[self.warehouse.id]
+        )
+        suggestion = self.Suggestion.search([
+            ('product_id', '=', prod.id),
+            ('warehouse_id', '=', self.warehouse.id),
+        ])
+        self.assertEqual(len(suggestion), 1)
+        self.assertTrue(suggestion.needs_review)
+
+        cron_log_count_before = self.env['smart.reorder.cron.log'].search_count([])
+
+        # Click one time order
+        result = suggestion.action_mark_one_time_order()
+        self.assertEqual(prod.product_tmpl_id.reorder_behavior, 'against_order')
+        self.assertEqual(suggestion.suggested_reorder_qty, 0.0)
+        self.assertFalse(suggestion.needs_review)
+        self.assertEqual(result.get('tag'), 'display_notification',
+                          'button must return a lightweight notification, not trigger a full run')
+
+        # Click regular orders
+        result = suggestion.action_mark_regular_order()
+        self.assertEqual(prod.product_tmpl_id.reorder_behavior, 'bulk_regular')
+        # Bypasses outlier check, so average should be 2000/6 = 333.33
+        self.assertAlmostEqual(suggestion.avg_monthly_demand, 333.33, places=2)
+        self.assertFalse(suggestion.needs_review)
+        self.assertEqual(result.get('tag'), 'display_notification')
+
+        # Neither button may trigger a real analysis run — Run History must show
+        # no phantom scheduled/manual entries from what the user experiences as
+        # a one-click product-level edit.
+        self.assertEqual(
+            self.env['smart.reorder.cron.log'].search_count([]),
+            cron_log_count_before,
+            'marking a product one-time/regular must not create a cron log entry '
+            '(i.e. must not trigger a full generate_suggestions() run)'
+        )
+
+    def test_needs_review_bulk_concentration(self):
+        prod = self.env['product.product'].create({
+            'name': 'Concentration Widget',
+            'type': 'product',
+            'standard_price': 1.0,
+        })
+        # Single large sale in month 0
+        order = self.env['sale.order'].create({
+            'partner_id': self.partner.id,
+            'company_id': self.company.id,
+            'warehouse_id': self.warehouse.id,
+            'date_order': datetime.combine(self.month_starts[0] + timedelta(days=4), datetime.min.time()),
+            'order_line': [(0, 0, {
+                'product_id': prod.id,
+                'product_uom_qty': 100.0,
+                'price_unit': 10.0,
+            })],
+        })
+        order.action_confirm()
+        order.order_line.qty_delivered = 100.0
+
+        self.Suggestion.generate_suggestions(
+            company_ids=[self.company.id], warehouse_ids=[self.warehouse.id]
+        )
+        suggestion = self.Suggestion.search([
+            ('product_id', '=', prod.id),
+            ('warehouse_id', '=', self.warehouse.id),
+        ])
+        self.assertEqual(len(suggestion), 1)
+        self.assertTrue(suggestion.needs_review)
+        self.assertIn("Single month carries half or more of total demand", suggestion.needs_review_reason)
+        # A single 100-unit month against 5 zero months is also a one-time-order
+        # spike (Fix 2): excluded as an outlier and forecast to 0. Confidence:
+        # 5 zero months (-25) + 1 outlier month excluded (-15) +
+        # very-limited-history, only 1 month with sales (-10) +
+        # concentration (-30) = 100 - 80 = 20.
+        self.assertEqual(suggestion.confidence, 20.0)
+
+    def test_bulk_regular_skips_concentration_review(self):
+        """A product marked 'bulk_regular' should NOT get the concentration review
+        flag or the confidence concentration deduction (Fix 1 / Fix 10), even
+        when a single month carries ≥50% of total demand."""
+        prod = self.env['product.product'].create({
+            'name': 'Bulk Regular Widget',
+            'type': 'product',
+            'standard_price': 1.0,
+        })
+        # Mark the product as bulk-regular
+        prod.product_tmpl_id.reorder_behavior = 'bulk_regular'
+
+        # Single large sale in month 0 — would normally trigger concentration
+        order = self.env['sale.order'].create({
+            'partner_id': self.partner.id,
+            'company_id': self.company.id,
+            'warehouse_id': self.warehouse.id,
+            'date_order': datetime.combine(self.month_starts[0] + timedelta(days=4), datetime.min.time()),
+            'order_line': [(0, 0, {
+                'product_id': prod.id,
+                'product_uom_qty': 100.0,
+                'price_unit': 10.0,
+            })],
+        })
+        order.action_confirm()
+        order.order_line.qty_delivered = 100.0
+
+        self.Suggestion.generate_suggestions(
+            company_ids=[self.company.id], warehouse_ids=[self.warehouse.id]
+        )
+        suggestion = self.Suggestion.search([
+            ('product_id', '=', prod.id),
+            ('warehouse_id', '=', self.warehouse.id),
+        ])
+        self.assertEqual(len(suggestion), 1)
+        # Concentration reason must NOT appear because buyer confirmed bulk-regular
+        if suggestion.needs_review_reason:
+            self.assertNotIn(
+                "Single month carries half or more of total demand",
+                suggestion.needs_review_reason,
+            )
+        # bulk_regular also bypasses spike-rejection entirely (no excluded
+        # months), so only the zero-months (-25) and very-limited-history
+        # (-10) deductions apply — no outlier and no concentration penalty:
+        # 100 - 25 - 10 = 65.
+        self.assertEqual(suggestion.confidence, 65.0)
+        self.assertNotIn('-30', suggestion.notes)
+        self.assertIn('no penalty applied', suggestion.notes)
+        self.assertEqual(suggestion.excluded_outlier_months, 0)
+
+    def test_dashboard_multi_company_security(self):
+        # Baseline: dashboard scoped to self.company ONLY, before the other
+        # company's data exists. Compared against the same call again after —
+        # a relative before/after check, since this class accumulates
+        # suggestions for self.company/self.warehouse across many test methods
+        # and a hardcoded absolute expectation would be brittle.
+        scoped = self.Suggestion.with_context(allowed_company_ids=[self.company.id])
+        before = scoped.get_dashboard_data()
+
+        # Create a second company
+        other_company = self.env['res.company'].create({'name': 'Other test company'})
+        other_warehouse = self.env['stock.warehouse'].create({
+            'name': 'Other Warehouse',
+            'code': 'OWH',
+            'company_id': other_company.id,
+        })
+        prod = self.env['product.product'].create({
+            'name': 'Other Company Product',
+            'type': 'product',
+        })
+        # Create a suggestion for the other company, with a non-zero purchase
+        # value so a budget-sum leak would actually be visible.
+        other_suggestion = self.Suggestion.create({
+            'company_id': other_company.id,
+            'warehouse_id': other_warehouse.id,
+            'product_id': prod.id,
+            'avg_monthly_demand': 10.0,
+            'suggested_reorder_qty': 10.0,
+            'vendor_price': 50.0,
+            'reorder_needed': True,
+            'within_budget': True,
+            'urgency': 'critical',
+            'abc_class': 'A',
+            'sales_pattern': 'regular',
+        })
+        self.assertEqual(other_suggestion.estimated_purchase_value, 500.0)
+
+        # And an evaluated back-test snapshot for the other company, with a
+        # deliberately extreme MAPE so a leak would be obvious in the average.
+        self.env['smart.reorder.forecast.snapshot'].create({
+            'company_id': other_company.id,
+            'warehouse_id': other_warehouse.id,
+            'product_id': prod.id,
+            'snapshot_date': date.today() - timedelta(days=60),
+            'forecast_demand': 10.0,
+            'lead_time_days': 30,
+            'abc_class': 'A',
+            'evaluated': True,
+            'absolute_error_pct': 999.0,
+        })
+
+        # Run get_dashboard_data as self.env (with self.company in environment)
+        # The allowed companies in self.env should only be self.company (not other_company)
+        after = scoped.get_dashboard_data()
+
+        # Verify other suggestion and other warehouse are excluded from the result
+        self.assertEqual(after['urgency'].get('critical', 0), 0)
+        self.assertNotIn(other_warehouse.id, [w['id'] for w in after['warehouses']])
+
+        # Budget sums and back-test accuracy for self.company must be
+        # unaffected by the other company's records existing.
+        self.assertEqual(after['total_reorder_value'], before['total_reorder_value'])
+        self.assertEqual(after['within_budget_value'], before['within_budget_value'])
+        self.assertEqual(after['backtest']['overall_mape'], before['backtest']['overall_mape'])
+        self.assertTrue(
+            all(v < 900.0 for v in after['backtest']['mape_by_abc'].values()),
+            'the other company\'s 999.0 MAPE snapshot must not leak into this company\'s breakdown'
+        )
+
+    def test_draft_po_feedback_loop(self):
+        prod = self.env['product.product'].create({
+            'name': 'PO Loop Widget',
+            'type': 'product',
+            'standard_price': 1.0,
+        })
+
+        # Make a reorder suggested suggestion first. Uniform demand across
+        # every month — a single-month spike would be excluded as an outlier
+        # and classified "one-time big order" (Fix 2), which suppresses the
+        # suggested qty for a reason unrelated to what this test is checking.
+        for month_start in self.month_starts:
+            order = self.env['sale.order'].create({
+                'partner_id': self.partner.id,
+                'company_id': self.company.id,
+                'warehouse_id': self.warehouse.id,
+                'date_order': datetime.combine(month_start + timedelta(days=4), datetime.min.time()),
+                'order_line': [(0, 0, {
+                    'product_id': prod.id,
+                    'product_uom_qty': 15.0,
+                    'price_unit': 10.0,
+                })],
+            })
+            order.action_confirm()
+            order.order_line.qty_delivered = 15.0
+
+        self.Suggestion.generate_suggestions(
+            company_ids=[self.company.id], warehouse_ids=[self.warehouse.id]
+        )
+        suggestion = self.Suggestion.search([
+            ('product_id', '=', prod.id),
+            ('warehouse_id', '=', self.warehouse.id),
+        ])
+        self.assertEqual(len(suggestion), 1)
+        self.assertTrue(suggestion.reorder_needed)
+
+        # Create draft PO and link it
+        po = self.env['purchase.order'].create({
+            'partner_id': self.partner.id,
+            'company_id': self.company.id,
+        })
+        suggestion.write({'po_ids': [(4, po.id)]})
+
+        # Re-run suggestion generation
+        self.Suggestion.generate_suggestions(
+            company_ids=[self.company.id], warehouse_ids=[self.warehouse.id]
+        )
+        suggestion.invalidate_recordset()
+        
+        self.assertFalse(suggestion.reorder_needed)
+        self.assertEqual(suggestion.suggested_reorder_qty, 0.0)
+        self.assertIn("Draft PO already created", suggestion.notes)
+
+    def test_draft_po_ref_names_the_po_and_releases_once_confirmed(self):
+        prod = self.env['product.product'].create({
+            'name': 'Draft PO Ref Widget', 'type': 'product', 'standard_price': 1.0,
+        })
+        # Uniform demand across every month — a single-month spike would be
+        # excluded as an outlier (Fix 2) and suppress the suggestion for a
+        # reason unrelated to what this test is checking.
+        for month_start in self.month_starts:
+            order = self.env['sale.order'].create({
+                'partner_id': self.partner.id,
+                'company_id': self.company.id,
+                'warehouse_id': self.warehouse.id,
+                'date_order': datetime.combine(month_start + timedelta(days=4), datetime.min.time()),
+                'order_line': [(0, 0, {
+                    'product_id': prod.id, 'product_uom_qty': 15.0, 'price_unit': 10.0,
+                })],
+            })
+            order.action_confirm()
+            order.order_line.qty_delivered = 15.0
+
+        self.Suggestion.generate_suggestions(
+            company_ids=[self.company.id], warehouse_ids=[self.warehouse.id]
+        )
+        suggestion = self.Suggestion.search([
+            ('product_id', '=', prod.id), ('warehouse_id', '=', self.warehouse.id),
+        ])
+        self.assertFalse(suggestion.draft_po_ref, "no draft PO linked yet")
+
+        po = self.env['purchase.order'].create({
+            'partner_id': self.partner.id,
+            'company_id': self.company.id,
+            'order_line': [(0, 0, {
+                'product_id': prod.id,
+                'product_qty': 50.0,
+                'price_unit': 10.0,
+                'name': prod.name,
+            })],
+        })
+        suggestion.write({'po_ids': [(4, po.id)]})
+        self.assertEqual(suggestion.draft_po_ref, po.name)
+
+        # Re-run: the guard must kick in — quantity/flag suppressed, and the
+        # note prominently names this exact draft PO (reference + quantity).
+        self.Suggestion.generate_suggestions(
+            company_ids=[self.company.id], warehouse_ids=[self.warehouse.id]
+        )
+        suggestion.invalidate_recordset()
+        self.assertFalse(suggestion.reorder_needed)
+        self.assertEqual(suggestion.suggested_reorder_qty, 0.0)
+        self.assertIn(po.name, suggestion.notes)
+        self.assertIn('50', suggestion.notes)
+        self.assertTrue(suggestion.needs_review)
+        self.assertIn(po.name, suggestion.needs_review_reason)
+
+        # Once the PO is no longer draft, the guard must release — "still in
+        # draft state" is the trigger, not merely having a linked po_ids
+        # record. (The PO's 50 units now also count as confirmed incoming
+        # supply via Q3, so whether reorder_needed ends up True or False is
+        # ordinary stock math from here — what this asserts is that the
+        # guard's own suppression/note no longer applies.)
+        po.write({'state': 'purchase'})
+        self.assertFalse(suggestion.draft_po_ref, "draft_po_ref must clear once the PO is confirmed")
+        self.Suggestion.generate_suggestions(
+            company_ids=[self.company.id], warehouse_ids=[self.warehouse.id]
+        )
+        suggestion.invalidate_recordset()
+        self.assertNotIn(
+            "Draft PO already created", suggestion.notes or "",
+            "the guard note must not persist once the linked PO is no longer draft"
+        )
+
+    def test_incoming_internal_transfers(self):
+        prod = self.env['product.product'].create({
+            'name': 'Transfer Loop Widget',
+            'type': 'product',
+            'standard_price': 1.0,
+        })
+
+        # Add some historical sales so there is demand
+        order = self.env['sale.order'].create({
+            'partner_id': self.partner.id,
+            'company_id': self.company.id,
+            'warehouse_id': self.warehouse.id,
+            'date_order': datetime.combine(self.month_starts[0] + timedelta(days=4), datetime.min.time()),
+            'order_line': [(0, 0, {
+                'product_id': prod.id,
+                'product_uom_qty': 60.0,
+                'price_unit': 10.0,
+            })],
+        })
+        order.action_confirm()
+
+        # Create a donor warehouse
+        donor_wh = self.env['stock.warehouse'].create({
+            'name': 'Donor Wh',
+            'code': 'DNW',
+            'company_id': self.company.id,
+        })
+
+        # Create a confirmed incoming internal transfer move
+        picking_type = self.env['stock.picking.type'].search([
+            ('company_id', '=', self.company.id),
+            ('code', '=', 'internal')
+        ], limit=1)
+        
+        picking = self.env['stock.picking'].create({
+            'picking_type_id': picking_type.id,
+            'location_id': donor_wh.lot_stock_id.id,
+            'location_dest_id': self.warehouse.lot_stock_id.id,
+            'company_id': self.company.id,
+            'move_ids': [(0, 0, {
+                'name': prod.name,
+                'product_id': prod.id,
+                'product_uom_qty': 40.0,
+                'product_uom': prod.uom_id.id,
+                'location_id': donor_wh.lot_stock_id.id,
+                'location_dest_id': self.warehouse.lot_stock_id.id,
+            })]
+        })
+        picking.action_confirm()
+
+        self.Suggestion.generate_suggestions(
+            company_ids=[self.company.id], warehouse_ids=[self.warehouse.id]
+        )
+        suggestion = self.Suggestion.search([
+            ('product_id', '=', prod.id),
+            ('warehouse_id', '=', self.warehouse.id),
+        ])
+        
+        # Verify the 40.0 units are counted in incoming stock
+        self.assertEqual(suggestion.qty_incoming, 40.0)
+
+    def test_wizard_returned_scope_filtering(self):
+        wizard = self.env['smart.reorder.wizard'].create({
+            'scope': 'warehouse',
+            'warehouse_ids': [(6, 0, [self.warehouse.id])],
+            'include_zero_demand': False,
+        })
+        action = wizard.action_generate()
+        self.assertEqual(action['res_model'], 'smart.reorder.suggestion')
+        self.assertEqual(action['domain'], [('warehouse_id', 'in', [self.warehouse.id])])
+        self.assertEqual(action['context'].get('search_default_gb_warehouse'), 1)
+
+    def test_snapshot_eval_date_and_notifications(self):
+        # We need manager group to click button
+        self.env.user.groups_id = [(4, self.env.ref('smart_reorder_advisor.group_smart_reorder_manager').id)]
+        
+        prod = self.env['product.product'].create({
+            'name': 'Back-testing Widget',
+            'type': 'product',
+        })
+        
+        # 1. Create a young snapshot
+        snap = self.env['smart.reorder.forecast.snapshot'].create({
+            'company_id': self.company.id,
+            'warehouse_id': self.warehouse.id,
+            'product_id': prod.id,
+            'snapshot_date': date.today(),
+            'lead_time_days': 30,
+            'forecast_demand': 10.0,
+            'evaluated': False,
+        })
+        
+        # Attempting to evaluate should raise UserError
+        with self.assertRaises(UserError) as e:
+            snap.action_evaluate()
+        self.assertIn("not yet scoreable", str(e.exception))
+        
+        # 2. Make it ready by setting snapshot date back
+        snap.snapshot_date = date.today() - timedelta(days=45)
+        
+        # Try evaluating again
+        res = snap.action_evaluate()
+        self.assertTrue(snap.evaluated)
+        self.assertEqual(res['type'], 'ir.actions.client')
+        self.assertEqual(res['tag'], 'display_notification')
+        self.assertEqual(res['params']['type'], 'success')
+
+    def test_snapshot_evaluate_scores_mature_and_skips_immature_in_mixed_selection(self):
+        # A mixed selection of one mature + one immature snapshot must score
+        # the mature one instead of refusing the whole batch, and the
+        # notification must report both counts.
+        prod_mature = self.env['product.product'].create({
+            'name': 'Mixed Eval Mature Widget', 'type': 'product',
+        })
+        prod_immature = self.env['product.product'].create({
+            'name': 'Mixed Eval Immature Widget', 'type': 'product',
+        })
+        snap_mature = self.env['smart.reorder.forecast.snapshot'].create({
+            'company_id': self.company.id,
+            'warehouse_id': self.warehouse.id,
+            'product_id': prod_mature.id,
+            'snapshot_date': date.today() - timedelta(days=45),
+            'lead_time_days': 30,
+            'forecast_demand': 10.0,
+            'evaluated': False,
+        })
+        immature_ready_date = date.today() + timedelta(days=30)
+        snap_immature = self.env['smart.reorder.forecast.snapshot'].create({
+            'company_id': self.company.id,
+            'warehouse_id': self.warehouse.id,
+            'product_id': prod_immature.id,
+            'snapshot_date': date.today(),
+            'lead_time_days': 30,
+            'forecast_demand': 5.0,
+            'evaluated': False,
+        })
+
+        res = (snap_mature + snap_immature).action_evaluate()
+
+        snap_mature.invalidate_recordset()
+        snap_immature.invalidate_recordset()
+        self.assertTrue(snap_mature.evaluated, 'the mature snapshot must be scored')
+        self.assertFalse(snap_immature.evaluated, 'the immature snapshot must be left alone, not errored on')
+
+        self.assertEqual(res['type'], 'ir.actions.client')
+        self.assertEqual(res['tag'], 'display_notification')
+        self.assertEqual(res['params']['type'], 'success')
+        message = res['params']['message']
+        self.assertIn('1', message)
+        self.assertIn('skipped', message)
+        self.assertIn(str(immature_ready_date), message)
+
+    def test_snapshot_skip_pending_duplicates(self):
+        prod = self.env['product.product'].create({
+            'name': 'Duplicate Test Widget',
+            'type': 'product',
+        })
+        # Generate some sales history
+        order = self.env['sale.order'].create({
+            'partner_id': self.partner.id,
+            'company_id': self.company.id,
+            'warehouse_id': self.warehouse.id,
+            'date_order': datetime.combine(self.month_starts[0] + timedelta(days=4), datetime.min.time()),
+            'order_line': [(0, 0, {
+                'product_id': prod.id,
+                'product_uom_qty': 10.0,
+                'price_unit': 10.0,
+            })],
+        })
+        order.action_confirm()
+
+        # Generate suggestions first time - should create snapshot
+        self.config.snapshot_scope = 'all'
+        self.Suggestion.generate_suggestions(
+            company_ids=[self.company.id], warehouse_ids=[self.warehouse.id]
+        )
+        
+        snapshots1 = self.env['smart.reorder.forecast.snapshot'].search([
+            ('product_id', '=', prod.id),
+            ('warehouse_id', '=', self.warehouse.id),
+        ])
+        self.assertEqual(len(snapshots1), 1)
+        self.assertFalse(snapshots1.evaluated)
+
+        # Generate suggestions second time - should skip duplicate
+        self.Suggestion.generate_suggestions(
+            company_ids=[self.company.id], warehouse_ids=[self.warehouse.id]
+        )
+        
+        snapshots2 = self.env['smart.reorder.forecast.snapshot'].search([
+            ('product_id', '=', prod.id),
+            ('warehouse_id', '=', self.warehouse.id),
+        ])
+        # Still exactly 1 snapshot!
+        self.assertEqual(len(snapshots2), 1)
+
+    def test_snapshot_scope_settings(self):
+        # 1. Product A-Class (A+B class widget)
+        prod_ab = self.env['product.product'].create({
+            'name': 'AB Widget',
+            'type': 'product',
+        })
+        # Sells a lot, so Class A. A single 60-unit month would otherwise be
+        # excluded as a one-time spike (Fix 2), zeroing the forecast and
+        # misclassifying it as C — bulk_regular bypasses that (plain average).
+        prod_ab.product_tmpl_id.reorder_behavior = 'bulk_regular'
+        order1 = self.env['sale.order'].create({
+            'partner_id': self.partner.id,
+            'company_id': self.company.id,
+            'warehouse_id': self.warehouse.id,
+            'date_order': datetime.combine(self.month_starts[0] + timedelta(days=4), datetime.min.time()),
+            'order_line': [(0, 0, {
+                'product_id': prod_ab.id,
+                'product_uom_qty': 60.0,
+                'price_unit': 10.0,
+            })],
+        })
+        order1.action_confirm()
+        order1.order_line.qty_delivered = 60.0
+
+        # 2. Product C-Class (Slow mover)
+        prod_c = self.env['product.product'].create({
+            'name': 'C Widget',
+            'type': 'product',
+        })
+        # Sells very little, so Class C
+        order2 = self.env['sale.order'].create({
+            'partner_id': self.partner.id,
+            'company_id': self.company.id,
+            'warehouse_id': self.warehouse.id,
+            'date_order': datetime.combine(self.month_starts[0] + timedelta(days=4), datetime.min.time()),
+            'order_line': [(0, 0, {
+                'product_id': prod_c.id,
+                'product_uom_qty': 0.1,
+                'price_unit': 10.0,
+            })],
+        })
+        order2.action_confirm()
+        order2.order_line.qty_delivered = 0.1
+
+        # Set config snapshot scope to 'ab_only'
+        self.config.snapshot_scope = 'ab_only'
+
+        # Generate suggestions
+        self.Suggestion.generate_suggestions(
+            company_ids=[self.company.id], warehouse_ids=[self.warehouse.id]
+        )
+
+        # Class AB should have snapshot
+        snap_ab = self.env['smart.reorder.forecast.snapshot'].search([
+            ('product_id', '=', prod_ab.id),
+            ('warehouse_id', '=', self.warehouse.id),
+        ])
+        self.assertTrue(snap_ab)
+
+        # Class C should NOT have snapshot
+        snap_c = self.env['smart.reorder.forecast.snapshot'].search([
+            ('product_id', '=', prod_c.id),
+            ('warehouse_id', '=', self.warehouse.id),
+        ])
+        self.assertFalse(snap_c)
+
+    def test_cron_include_zero_demand(self):
+        prod = self.env['product.product'].create({
+            'name': 'Zero Demand Widget',
+            'type': 'product',
+        })
+        # Archive any existing suggestions for this product to avoid interference
+        self.Suggestion.search([('product_id', '=', prod.id)]).unlink()
+
+        # 1. With cron_include_zero_demand = False
+        self.config.cron_include_zero_demand = False
+        self.Suggestion.generate_suggestions(
+            company_ids=[self.company.id],
+            warehouse_ids=[self.warehouse.id],
+            trigger_type='cron'
+        )
+        suggestion = self.Suggestion.search([
+            ('product_id', '=', prod.id),
+            ('warehouse_id', '=', self.warehouse.id),
+        ])
+        self.assertFalse(suggestion)
+
+        # 2. With cron_include_zero_demand = True
+        self.config.cron_include_zero_demand = True
+        self.Suggestion.generate_suggestions(
+            company_ids=[self.company.id],
+            warehouse_ids=[self.warehouse.id],
+            trigger_type='cron'
+        )
+        suggestion = self.Suggestion.search([
+            ('product_id', '=', prod.id),
+            ('warehouse_id', '=', self.warehouse.id),
+        ])
+        self.assertTrue(suggestion)
 
 
 @tagged('post_install', '-at_install')
@@ -1315,7 +2409,8 @@ class TestExportSuggestionsWizard(TransactionCase):
             'Part Number', 'Product Name', 'Category', 'Warehouse',
             'On Hand Qty', 'Avg Monthly Demand', 'Lead Time (Months)',
             'Suggested Reorder Qty', 'Reorder Value', 'Urgency', 'ABC Class',
-            'Demand Trend', 'Budget Rank', 'Vendor', 'Last Sale Date',
+            'Sales Pattern', 'Demand Trend', 'Budget Rank', 'Vendor', 'Last Sale Date',
+            'Months Left After Order',
         ])
         self.assertEqual(ws.max_row, 3, 'header + 2 data rows')
 
@@ -1483,6 +2578,7 @@ class TestTransferLane(TransactionCase):
             })],
         })
         so.action_confirm()
+        so.order_line.qty_delivered = 60.0
 
         suggestion = self._run()
         self.assertEqual(
@@ -1784,6 +2880,107 @@ class TestProductSupersession(TransactionCase):
             self.succ_tmpl.superseded_by_id = self.pred_tmpl.id
 
 
+@tagged('post_install', '-at_install')
+class TestSupersededNegativeStockUrgency(TransactionCase):
+    """Fix 11: negative on-hand is promised/shipped stock that doesn't exist —
+    that must never be hidden under a "Dead Stock" label, even for a
+    superseded part. Each test method creates its own predecessor/successor
+    product pair (rather than sharing one via setUpClass), so one test's
+    quant can't leak into and contaminate the other's on-hand assertion."""
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls.Suggestion = cls.env['smart.reorder.suggestion']
+        cls.company = cls.env.company
+        cls.config = cls.env['smart.reorder.config'].create({
+            'company_id': cls.company.id,
+            'analysis_period': '3',
+            'safety_buffer_months': 0.0,
+            'default_lead_time_months': 1.0,
+        })
+        cls.warehouse = cls.env['stock.warehouse'].search(
+            [('company_id', '=', cls.company.id)], limit=1
+        )
+        if not cls.warehouse:
+            cls.warehouse = cls.env['stock.warehouse'].create({
+                'name': 'Test WH', 'code': 'SNSWH', 'company_id': cls.company.id,
+            })
+        cls.partner = cls.env['res.partner'].create({'name': 'Negative Stock Supersession Customer'})
+
+    def _make_superseded_pair(self, name_suffix):
+        pred_tmpl = self.env['product.template'].create({
+            'name': f'Superseded Part {name_suffix}', 'type': 'product',
+        })
+        succ_tmpl = self.env['product.template'].create({
+            'name': f'Successor Part {name_suffix}', 'type': 'product',
+        })
+        pred_tmpl.superseded_by_id = succ_tmpl.id
+        pred_prod = pred_tmpl.product_variant_id
+
+        last_month_start = date.today().replace(day=1) - relativedelta(months=1)
+        order = self.env['sale.order'].create({
+            'partner_id': self.partner.id,
+            'company_id': self.company.id,
+            'warehouse_id': self.warehouse.id,
+            'date_order': datetime.combine(last_month_start + timedelta(days=5), datetime.min.time()),
+            'order_line': [(0, 0, {
+                'product_id': pred_prod.id, 'product_uom_qty': 10.0, 'price_unit': 10.0,
+            })],
+        })
+        order.action_confirm()
+        order.order_line.qty_delivered = 10.0
+        return pred_prod, succ_tmpl
+
+    def test_superseded_with_negative_stock_is_critical_not_dead(self):
+        pred_prod, succ_tmpl = self._make_superseded_pair('Negative')
+        self.env['stock.quant'].create({
+            'product_id': pred_prod.id,
+            'location_id': self.warehouse.lot_stock_id.id,
+            'quantity': -4.0,
+        })
+
+        self.Suggestion.generate_suggestions(
+            company_ids=[self.company.id], warehouse_ids=[self.warehouse.id]
+        )
+        suggestion = self.Suggestion.search([
+            ('product_id', '=', pred_prod.id), ('warehouse_id', '=', self.warehouse.id),
+        ])
+        self.assertTrue(suggestion)
+        self.assertEqual(suggestion.qty_on_hand, -4.0)
+
+        # No-replenishment behavior is unchanged even though urgency flips.
+        self.assertEqual(suggestion.suggested_reorder_qty, 0.0)
+        self.assertFalse(suggestion.reorder_needed)
+
+        # Negative stock must never be hidden under a Dead Stock label.
+        self.assertEqual(suggestion.urgency, 'critical')
+        self.assertFalse(suggestion.is_dead_stock)
+        self.assertIn('SUPERSEDED WITH NEGATIVE STOCK', suggestion.notes)
+        self.assertIn(succ_tmpl.name, suggestion.notes)
+
+    def test_superseded_with_positive_stock_stays_dead(self):
+        pred_prod, succ_tmpl = self._make_superseded_pair('Positive')
+        self.env['stock.quant'].create({
+            'product_id': pred_prod.id,
+            'location_id': self.warehouse.lot_stock_id.id,
+            'quantity': 6.0,
+        })
+
+        self.Suggestion.generate_suggestions(
+            company_ids=[self.company.id], warehouse_ids=[self.warehouse.id]
+        )
+        suggestion = self.Suggestion.search([
+            ('product_id', '=', pred_prod.id), ('warehouse_id', '=', self.warehouse.id),
+        ])
+        self.assertTrue(suggestion)
+        self.assertEqual(suggestion.qty_on_hand, 6.0)
+        self.assertEqual(suggestion.suggested_reorder_qty, 0.0)
+        self.assertFalse(suggestion.reorder_needed)
+        self.assertEqual(suggestion.urgency, 'dead')
+        self.assertTrue(suggestion.is_dead_stock)
+        self.assertIn('SUPERSEDED: This part has been superseded', suggestion.notes)
+
 
 class TestReorderConfigOrderCycle(TransactionCase):
 
@@ -1859,6 +3056,7 @@ class TestReorderOverstockGuard(TransactionCase):
             })],
         })
         so.action_confirm()
+        so.order_line.qty_delivered = 6.0
 
         self.env['smart.reorder.suggestion'].generate_suggestions(
             company_ids=[company.id], warehouse_ids=[warehouse.id]
@@ -1868,7 +3066,7 @@ class TestReorderOverstockGuard(TransactionCase):
             ('product_id', '=', product.id),
             ('warehouse_id', '=', warehouse.id),
         ])
-        
+
         self.assertTrue(suggestion, "Suggestion should be generated")
         self.assertTrue(suggestion.is_overstocked)
         self.assertTrue(suggestion.needs_review)
@@ -1924,6 +3122,7 @@ class TestReorderBudgetCapVendorPrice(TransactionCase):
             })],
         })
         so.action_confirm()
+        so.order_line.qty_delivered = 6.0
 
         self.env['smart.reorder.suggestion'].generate_suggestions(
             company_ids=[company.id], warehouse_ids=[warehouse.id]
@@ -1965,6 +3164,13 @@ class TestReorderPriceBreaksAltVendors(TransactionCase):
             'type': 'product',
             'standard_price': 5.0,
         })
+        # This test is about vendor/price-break selection, not demand
+        # robustness — both sales below land in the same single month, which
+        # would otherwise be excluded as a one-time-order spike (Fix 2) and
+        # zero out the forecast the price-break tiers are supposed to react
+        # to. bulk_regular bypasses that (plain average, no exclusion),
+        # matching what this test's quantities/tiers were designed against.
+        product.product_tmpl_id.reorder_behavior = 'bulk_regular'
 
         primary_vendor = self.env['res.partner'].create({'name': 'Primary Vendor'})
         alt_vendor = self.env['res.partner'].create({'name': 'Alternative Vendor'})
@@ -2008,6 +3214,7 @@ class TestReorderPriceBreaksAltVendors(TransactionCase):
             })],
         })
         so.action_confirm()
+        so.order_line.qty_delivered = 20.0
 
         self.env['smart.reorder.suggestion'].generate_suggestions(
             company_ids=[company.id], warehouse_ids=[warehouse.id]
@@ -2036,6 +3243,7 @@ class TestReorderPriceBreaksAltVendors(TransactionCase):
             })],
         })
         so_large.action_confirm()
+        so_large.order_line.qty_delivered = 120.0
 
         self.env['smart.reorder.suggestion'].generate_suggestions(
             company_ids=[company.id], warehouse_ids=[warehouse.id]
@@ -2109,6 +3317,13 @@ class TestReorderProvisionalNegativeStock(TransactionCase):
             'type': 'product',
             'standard_price': 5.0,
         })
+        # Part 3 of this test drives a single 12-unit month through a full
+        # generate_suggestions() run and expects a plain average (12/6=2.0).
+        # A single month that size would otherwise be excluded as a one-time
+        # spike (Fix 2), zeroing the forecast — bulk_regular bypasses that.
+        # flag_negative_stock_product() (parts 1-2) doesn't consult
+        # reorder_behavior at all, so this has no effect on those assertions.
+        product.product_tmpl_id.reorder_behavior = 'bulk_regular'
 
         supplier = self.env['res.partner'].create({'name': 'Provisional supplier'})
         self.env['product.supplierinfo'].create({
@@ -2191,6 +3406,7 @@ class TestReorderProvisionalNegativeStock(TransactionCase):
             })],
         })
         so.action_confirm()
+        so.order_line.qty_delivered = 12.0
 
         self.env['smart.reorder.suggestion'].generate_suggestions(
             company_ids=[company.id], warehouse_ids=[warehouse.id]
@@ -2205,6 +3421,118 @@ class TestReorderProvisionalNegativeStock(TransactionCase):
         # raw_qty = 4.5 - (-5.0) = 9.5 -> rounded to MOQ = 10.
         self.assertEqual(suggestion.suggested_reorder_qty, 10.0)
         self.assertEqual(suggestion.avg_monthly_demand, 2.0)
+
+
+@tagged('post_install', '-at_install')
+class TestMultiCompanyProductCost(TransactionCase):
+    """standard_price is a company-dependent property field. Both the bulk
+    cost fetch in _fetch_warehouse_data() (Q4) and the cost read in
+    flag_negative_stock_product() must resolve it within the context of the
+    company being analyzed/flagged — not whatever company the ORM defaults to
+    under sudo() — or a multi-company setup prices suggestions with the wrong
+    company's average cost."""
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls.company_a = cls.env.company
+        cls.company_b = cls.env['res.company'].create({'name': 'Cost Test Company B'})
+
+        cls.warehouse_a = cls.env['stock.warehouse'].search(
+            [('company_id', '=', cls.company_a.id)], limit=1
+        )
+        if not cls.warehouse_a:
+            cls.warehouse_a = cls.env['stock.warehouse'].create({
+                'name': 'Cost Test WH A', 'code': 'CTWA', 'company_id': cls.company_a.id,
+            })
+        cls.warehouse_b = cls.env['stock.warehouse'].create({
+            'name': 'Cost Test WH B', 'code': 'CTWB', 'company_id': cls.company_b.id,
+        })
+
+        for comp, wh in ((cls.company_a, cls.warehouse_a), (cls.company_b, cls.warehouse_b)):
+            if not cls.env['smart.reorder.config'].search([('company_id', '=', comp.id)], limit=1):
+                cls.env['smart.reorder.config'].create({'company_id': comp.id})
+
+        # A single product shared across both companies, with a different
+        # company-dependent standard_price per company.
+        cls.product = cls.env['product.product'].create({
+            'name': 'Multi-Company Cost Widget',
+            'type': 'product',
+        })
+        cls.product.with_company(cls.company_a).standard_price = 10.0
+        cls.product.with_company(cls.company_b).standard_price = 40.0
+
+        cls.partner = cls.env['res.partner'].create({'name': 'Cost Test Customer'})
+
+    def test_generate_suggestions_uses_own_company_cost(self):
+        for comp, wh in ((self.company_a, self.warehouse_a), (self.company_b, self.warehouse_b)):
+            so = self.env['sale.order'].create({
+                'partner_id': self.partner.id,
+                'company_id': comp.id,
+                'warehouse_id': wh.id,
+                'date_order': datetime.combine(date.today(), datetime.min.time()),
+                'order_line': [(0, 0, {
+                    'product_id': self.product.id,
+                    'product_uom_qty': 5.0,
+                    'price_unit': 1.0,
+                })],
+            })
+            so.action_confirm()
+            so.order_line.qty_delivered = 5.0
+
+        self.env['smart.reorder.suggestion'].generate_suggestions(
+            company_ids=[self.company_a.id], warehouse_ids=[self.warehouse_a.id]
+        )
+        self.env['smart.reorder.suggestion'].generate_suggestions(
+            company_ids=[self.company_b.id], warehouse_ids=[self.warehouse_b.id]
+        )
+
+        suggestion_a = self.env['smart.reorder.suggestion'].search([
+            ('product_id', '=', self.product.id), ('warehouse_id', '=', self.warehouse_a.id),
+        ])
+        suggestion_b = self.env['smart.reorder.suggestion'].search([
+            ('product_id', '=', self.product.id), ('warehouse_id', '=', self.warehouse_b.id),
+        ])
+        self.assertEqual(len(suggestion_a), 1)
+        self.assertEqual(len(suggestion_b), 1)
+        self.assertEqual(suggestion_a.product_cost, 10.0, "Company A's suggestion must use Company A's cost")
+        self.assertEqual(suggestion_b.product_cost, 40.0, "Company B's suggestion must use Company B's cost")
+        self.assertEqual(
+            suggestion_a.reorder_value,
+            suggestion_a.suggested_reorder_qty * 10.0,
+        )
+        self.assertEqual(
+            suggestion_b.reorder_value,
+            suggestion_b.suggested_reorder_qty * 40.0,
+        )
+
+    def test_flag_negative_stock_uses_own_company_cost(self):
+        self.env['stock.quant'].create({
+            'product_id': self.product.id,
+            'location_id': self.warehouse_a.lot_stock_id.id,
+            'quantity': -2.0,
+        })
+        self.env['stock.quant'].create({
+            'product_id': self.product.id,
+            'location_id': self.warehouse_b.lot_stock_id.id,
+            'quantity': -2.0,
+        })
+
+        self.env['smart.reorder.suggestion'].flag_negative_stock_product(
+            self.product.id, self.warehouse_a.id, self.company_a.id
+        )
+        self.env['smart.reorder.suggestion'].flag_negative_stock_product(
+            self.product.id, self.warehouse_b.id, self.company_b.id
+        )
+
+        suggestion_a = self.env['smart.reorder.suggestion'].search([
+            ('product_id', '=', self.product.id), ('warehouse_id', '=', self.warehouse_a.id),
+        ])
+        suggestion_b = self.env['smart.reorder.suggestion'].search([
+            ('product_id', '=', self.product.id), ('warehouse_id', '=', self.warehouse_b.id),
+        ])
+        self.assertEqual(suggestion_a.product_cost, 10.0)
+        self.assertEqual(suggestion_b.product_cost, 40.0)
 
 
 class TestReorderForecastBacktesting(TransactionCase):
@@ -2332,6 +3660,85 @@ class TestReorderForecastBacktesting(TransactionCase):
 
 
 @tagged('post_install', '-at_install')
+class TestSnapshotEvaluatedNotEditable(TransactionCase):
+    """A manager clicking a toggle in the snapshot list must not be able to flip
+    'Evaluated' without running the scorer — that would inject a zero-error row
+    into the MAPE averages on the dashboard. Only _score_snapshots() / the
+    Evaluate button may set this field."""
+
+    def test_evaluated_field_is_readonly_at_model_level(self):
+        field_info = self.env['smart.reorder.forecast.snapshot'].fields_get(['evaluated'])
+        self.assertTrue(
+            field_info['evaluated']['readonly'],
+            "'evaluated' must be readonly at the model level so no view can "
+            "accidentally expose it as writable"
+        )
+
+    def test_tree_view_does_not_use_toggle_widget(self):
+        tree_view = self.env.ref('smart_reorder_advisor.view_smart_reorder_forecast_snapshot_tree')
+        self.assertNotIn(
+            'boolean_toggle', tree_view.arch_db,
+            "the snapshot list must render 'evaluated' as a plain read-only "
+            "boolean, not a clickable toggle"
+        )
+
+    def test_scoring_still_sets_evaluated_correctly(self):
+        # The readonly field must not block the scorer's own ORM write.
+        company = self.env.company
+        warehouse = self.env['stock.warehouse'].search([('company_id', '=', company.id)], limit=1)
+        if not warehouse:
+            warehouse = self.env['stock.warehouse'].create({
+                'name': 'Test WH Eval', 'code': 'TWHE', 'company_id': company.id,
+            })
+        product = self.env['product.product'].create({
+            'name': 'Evaluated Field Test Product', 'type': 'product',
+        })
+        snap = self.env['smart.reorder.forecast.snapshot'].create({
+            'company_id': company.id,
+            'warehouse_id': warehouse.id,
+            'product_id': product.id,
+            'snapshot_date': date.today() - timedelta(days=45),
+            'forecast_demand': 10.0,
+            'lead_time_days': 30,
+            'evaluated': False,
+        })
+        self.assertFalse(snap.evaluated)
+        self.env['smart.reorder.forecast.snapshot']._score_snapshots()
+        snap.invalidate_recordset()
+        self.assertTrue(snap.evaluated)
+
+
+@tagged('post_install', '-at_install')
+class TestForecastSnapshotCompositeIndex(TransactionCase):
+    """Fix 12: the scorer's pending-snapshot search and the dashboard's
+    back-test aggregation both filter on evaluated + company (+ warehouse/
+    product) — a composite index matching that access pattern must exist,
+    created in ForecastSnapshot.init() at module initialization."""
+
+    def test_composite_eval_scope_index_exists_with_expected_columns(self):
+        self.env.cr.execute("""
+            SELECT indexdef FROM pg_indexes
+            WHERE tablename = 'smart_reorder_forecast_snapshot'
+              AND indexname = 'smart_reorder_forecast_snapshot_eval_scope_idx'
+        """)
+        row = self.env.cr.fetchone()
+        self.assertIsNotNone(
+            row,
+            'composite index on (evaluated, company_id, warehouse_id, product_id) '
+            'must exist on smart_reorder_forecast_snapshot'
+        )
+        indexdef = row[0]
+        for col in ('evaluated', 'company_id', 'warehouse_id', 'product_id'):
+            self.assertIn(col, indexdef)
+
+        # Column order matters: evaluated must lead so both the scorer's
+        # evaluated-only search and the dashboard's evaluated+company(+...)
+        # filter can use a leading-column index scan.
+        positions = [indexdef.index(col) for col in ('evaluated', 'company_id', 'warehouse_id', 'product_id')]
+        self.assertEqual(positions, sorted(positions), 'evaluated, company_id, warehouse_id, product_id must be in that order')
+
+
+@tagged('post_install', '-at_install')
 class TestReorderPureFunction(TransactionCase):
     """
     Direct unit tests for the pure per-product calculation function `_calculate_product_suggestion`.
@@ -2352,6 +3759,7 @@ class TestReorderPureFunction(TransactionCase):
             'alt_vendor_lead_margin_days': 5,
             'abc_a_threshold': 5.0,
             'abc_b_threshold': 1.0,
+            'min_spike_size': 10.0,
             'overstock_ceiling_months': 12.0,
             'transfer_surplus_threshold': 6.0,
             'default_internal_transfer_days': 3,
