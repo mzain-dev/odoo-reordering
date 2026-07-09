@@ -1,6 +1,6 @@
 {
     'name': 'Smart Reorder Advisor',
-    'version': '17.0.5.0.0',
+    'version': '17.0.5.1.0',
     'category': 'Inventory/Inventory',
     'summary': 'Monthly demand-based reorder suggestions — no Min/Max setup needed',
     'description': '''
@@ -52,7 +52,13 @@ CLASSIFICATION & BUDGET
   - Budget cap with priority ranking; estimated purchase value (vendor price basis)
     ''',
     'author': 'HMI Parts',
-    'depends': ['base', 'stock', 'sale', 'purchase', 'mail'],
+    'depends': ['stock', 'sale', 'purchase', 'mail'],
+    'external_dependencies': {
+        # Excel export (wizard/export_suggestions_wizard.py). Bundled with
+        # standard Odoo 16+ requirements, declared here so provisioning
+        # tooling knows about it explicitly.
+        'python': ['openpyxl'],
+    },
     'data': [
         'security/smart_reorder_security.xml',
         'security/ir.model.access.csv',

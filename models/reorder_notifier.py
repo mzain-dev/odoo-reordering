@@ -1,7 +1,8 @@
 import logging
 import base64
 from datetime import date
-from odoo import _
+
+from odoo.tools import html_escape
 
 _logger = logging.getLogger(__name__)
 
@@ -13,26 +14,38 @@ def send_notifications(self, company, config, critical_count, warehouse_id=None)
         return
 
     wh_domain = [('warehouse_id', '=', warehouse_id)] if warehouse_id else []
-    critical_items = self.sudo().search([
+    critical_domain = [
         ('company_id', '=', company.id),
         ('urgency', '=', 'critical'),
         ('is_snoozed', '=', False),
         ('active', '=', True),
-    ] + wh_domain)
-    urgent_items   = self.sudo().search([('company_id','=',company.id),('urgency','=','urgent')] + wh_domain)
-    dead_items     = self.sudo().search([('company_id','=',company.id),('is_dead_stock','=',True)] + wh_domain)
-    reorder_items  = self.sudo().search([('company_id','=',company.id),('reorder_needed','=',True)] + wh_domain)
-    total_value    = sum(reorder_items.mapped('estimated_purchase_value'))
-    currency       = company.currency_id.symbol or ''
+    ] + wh_domain
 
+    Suggestion = self.sudo()
+    # Counts and the value sum are computed DB-side; only the bounded top-10
+    # critical table loads actual records.
+    n_critical = Suggestion.search_count(critical_domain)
+    n_urgent = Suggestion.search_count(
+        [('company_id', '=', company.id), ('urgency', '=', 'urgent')] + wh_domain)
+    n_dead = Suggestion.search_count(
+        [('company_id', '=', company.id), ('is_dead_stock', '=', True)] + wh_domain)
+    value_group = Suggestion.read_group(
+        [('company_id', '=', company.id), ('reorder_needed', '=', True)] + wh_domain,
+        ['estimated_purchase_value:sum'], [],
+    )
+    total_value = (value_group[0]['estimated_purchase_value'] or 0.0) if value_group else 0.0
+    currency = company.currency_id.symbol or ''
+    critical_items = Suggestion.search(critical_domain, limit=10)
+
+    company_name = html_escape(company.name)
     body_lines = [
-        f'<h3>📦 Smart Reorder Advisor — {company.name}</h3>',
+        f'<h3>📦 Smart Reorder Advisor — {company_name}</h3>',
         f'<p>Analysis completed on <strong>{date.today()}</strong></p>',
         f'<table style="border-collapse:collapse;width:100%;">',
         f'<tr style="background:#f5f5f5;"><td style="padding:8px;"><strong>🔴 Critical</strong></td>'
-        f'<td style="padding:8px;"><strong>{len(critical_items)}</strong></td></tr>',
-        f'<tr><td style="padding:8px;">🟠 Urgent</td><td style="padding:8px;"><strong>{len(urgent_items)}</strong></td></tr>',
-        f'<tr style="background:#f5f5f5;"><td style="padding:8px;">💀 Dead Stock</td><td style="padding:8px;"><strong>{len(dead_items)}</strong></td></tr>',
+        f'<td style="padding:8px;"><strong>{n_critical}</strong></td></tr>',
+        f'<tr><td style="padding:8px;">🟠 Urgent</td><td style="padding:8px;"><strong>{n_urgent}</strong></td></tr>',
+        f'<tr style="background:#f5f5f5;"><td style="padding:8px;">💀 Dead Stock</td><td style="padding:8px;"><strong>{n_dead}</strong></td></tr>',
         f'<tr><td style="padding:8px;">💰 Total Est. Purchase Value</td><td style="padding:8px;"><strong>{currency} {total_value:,.2f}</strong></td></tr>',
         f'</table>',
     ]
@@ -45,10 +58,10 @@ def send_notifications(self, company, config, critical_count, warehouse_id=None)
             '<th style="padding:6px;">Product</th><th style="padding:6px;">On Hand</th>',
             '<th style="padding:6px;">Suggest</th><th style="padding:6px;">Value</th></tr>',
         ]
-        for item in critical_items[:10]:
+        for item in critical_items:
             body_lines.append(
-                f'<tr style="background:#fdecea;"><td style="padding:5px;">{item.default_code or "—"}</td>'
-                f'<td style="padding:5px;">{item.product_id.display_name}</td>'
+                f'<tr style="background:#fdecea;"><td style="padding:5px;">{html_escape(item.default_code or "—")}</td>'
+                f'<td style="padding:5px;">{html_escape(item.product_id.display_name)}</td>'
                 f'<td style="padding:5px;color:#e74c3c;"><strong>{item.qty_on_hand:.0f}</strong></td>'
                 f'<td style="padding:5px;"><strong>{item.suggested_reorder_qty:.0f}</strong></td>'
                 f'<td style="padding:5px;">{currency} {item.estimated_purchase_value:,.2f}</td></tr>'
@@ -84,8 +97,12 @@ def send_email_report(self, company, config):
         return None
 
     try:
-        report = self.env.ref('smart_reorder_advisor.action_report_reorder_summary').sudo()
-        pdf_content, _ = report._render_qweb_pdf(suggestions.ids)
+        # Odoo 16+ signature is _render_qweb_pdf(report_ref, res_ids, data):
+        # the report reference goes FIRST. Passing the ids as report_ref
+        # (the old 15.0 calling convention) makes every render fail.
+        pdf_content, _dummy = self.env['ir.actions.report'].sudo()._render_qweb_pdf(
+            'smart_reorder_advisor.action_report_reorder_summary', suggestions.ids
+        )
     except Exception as e:
         _logger.warning('SmartReorder: PDF generation failed — %s', e)
         return False
@@ -96,10 +113,14 @@ def send_email_report(self, company, config):
             'type':     'binary',
             'datas':    base64.b64encode(pdf_content),
             'mimetype': 'application/pdf',
+            # Link to the config record so these weekly PDFs are reachable and
+            # cleanable instead of accumulating as orphan attachments forever.
+            'res_model': 'smart.reorder.config',
+            'res_id':    config.id,
         })
         self.env['mail.mail'].sudo().create({
             'subject':         f'{config.email_subject_prefix} Weekly Reorder — {company.name} — {date.today()}',
-            'body_html':       f'<p>Weekly Smart Reorder Report for <strong>{company.name}</strong> attached.</p>',
+            'body_html':       f'<p>Weekly Smart Reorder Report for <strong>{html_escape(company.name)}</strong> attached.</p>',
             'recipient_ids':   [(6, 0, config.notify_user_ids.mapped('partner_id').ids)],
             'attachment_ids':  [(6, 0, [att.id])],
         }).send()

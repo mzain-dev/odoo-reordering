@@ -82,7 +82,7 @@
                 <field name="confidence"             string="Confidence" optional="hide" widget="progressbar"/>
 
                 <field name="product_cost"     string="Unit Cost" optional="show"/>
-                <field name="reorder_value"    string="Reorder Value (OMR)"
+                <field name="reorder_value"    string="Reorder Value"
                        widget="monetary" options="{'currency_field': 'currency_id'}"
                        decoration-bf="reorder_needed == True"/>
 

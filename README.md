@@ -1,6 +1,6 @@
 # Smart Reorder Advisor
 
-**Odoo 17 — Version 17.0.5.0.0**  
+**Odoo 17 — Version 17.0.5.1.0**  
 Author: HMI Parts  
 License: LGPL-3
 
@@ -38,8 +38,8 @@ Optional: `openpyxl` (Python package) — required only for Excel export. If not
 
 | Group               | Access                                                                                      |
 | ------------------- | ------------------------------------------------------------------------------------------- |
-| **Reorder User**    | Read suggestions, run wizards, export to Excel, view run history                            |
-| **Reorder Manager** | All of the above + edit configuration, manage transfer lanes, clear stuck locks, create POs |
+| **Reorder User**    | Read suggestions, snooze, export to Excel, view run history                                 |
+| **Reorder Manager** | All of the above + run the analysis wizard, edit configuration, manage transfer lanes, clear stuck locks, create POs |
 
 ---
 

@@ -1,5 +1,5 @@
 from odoo import models, fields, api, _
-from odoo.exceptions import UserError, ValidationError
+from odoo.exceptions import ValidationError
 from ..utils.access import require_group
 
 _MANAGER_GROUP = 'smart_reorder_advisor.group_smart_reorder_manager'
@@ -47,6 +47,15 @@ class SmartReorderConfig(models.Model):
         help='Typical frequency of ordering from vendors in months. '
              'Auto-derived from Analysis Frequency when not manually overridden (Weekly -> 0.25, Bi-Weekly -> 0.5, Monthly -> 1.0). '
              'Used to calculate the maximum stock level.'
+    )
+    order_cycle_is_manual = fields.Boolean(
+        string='Order Cycle Manually Set',
+        default=False,
+        help='Set automatically when a manager types a custom Order Cycle value. '
+             'While checked, changing the Analysis Frequency no longer overwrites '
+             'the order cycle — even if the manual value happens to match one of '
+             'the auto-derived defaults (0.25 / 0.5 / 1.0). Untick to return to '
+             'automatic derivation.'
     )
     default_lead_time_months = fields.Float(
         string='Default Lead Time (Months)',
@@ -258,24 +267,31 @@ class SmartReorderConfig(models.Model):
     )
 
     def _compute_run_status(self):
+        # One batched search for all configs instead of one query per record.
         CronLog = self.env['smart.reorder.cron.log'].sudo()
+        running_by_company = {}
+        for log in CronLog.search([
+            ('company_id', 'in', self.mapped('company_id').ids),
+            ('status', '=', 'running'),
+        ], order='started_at desc'):
+            running_by_company.setdefault(log.company_id.id, log)
         for rec in self:
-            running = CronLog.search([
-                ('company_id', '=', rec.company_id.id),
-                ('status', '=', 'running'),
-            ], order='started_at desc', limit=1)
+            running = running_by_company.get(rec.company_id.id)
             rec.is_running = bool(running)
             rec.run_started_at = running.started_at if running else False
 
+    _CYCLE_DEFAULTS = {'weekly': 0.25, 'biweekly': 0.5, 'monthly': 1.0}
+
     @api.depends('cron_frequency')
     def _compute_order_cycle_months(self):
-        defaults = {'weekly': 0.25, 'biweekly': 0.5, 'monthly': 1.0}
         for rec in self:
-            # If the value is not set or matches one of the defaults, update it to the new default
-            if not rec.order_cycle_months or rec.order_cycle_months in (0.0, 0.25, 0.5, 1.0):
-                rec.order_cycle_months = defaults.get(rec.cron_frequency, 1.0)
-            else:
+            # A manual value is authoritative — tracked via an explicit flag,
+            # not by sniffing whether the value "looks like" a default (which
+            # silently destroyed a deliberate manual 0.25/0.5/1.0).
+            if rec.order_cycle_is_manual and rec.order_cycle_months:
                 rec.order_cycle_months = rec.order_cycle_months
+            else:
+                rec.order_cycle_months = self._CYCLE_DEFAULTS.get(rec.cron_frequency, 1.0)
 
     _sql_constraints = [
         ('company_unique', 'UNIQUE(company_id)', 'Only one configuration allowed per company.'),
@@ -327,11 +343,36 @@ class SmartReorderConfig(models.Model):
 
     @api.model_create_multi
     def create(self, vals_list):
+        for vals in vals_list:
+            # An explicit order-cycle value at creation is a manual choice —
+            # unless it simply equals the derived default (the web client can
+            # echo the computed value back on save).
+            cycle = vals.get('order_cycle_months')
+            if cycle and 'order_cycle_is_manual' not in vals:
+                freq = vals.get('cron_frequency', 'weekly')
+                if cycle != self._CYCLE_DEFAULTS.get(freq):
+                    vals['order_cycle_is_manual'] = True
         records = super().create(vals_list)
         records._sync_cron_frequency()
         return records
 
     def write(self, vals):
+        # A typed custom order cycle becomes authoritative (manual); writing a
+        # value that equals the derived default returns the field to automatic
+        # derivation. The flag comparison must happen per record because the
+        # derived default depends on each record's (possibly changing) frequency.
+        if vals.get('order_cycle_months') and 'order_cycle_is_manual' not in vals:
+            cycle = vals['order_cycle_months']
+            res = True
+            for rec in self:
+                freq = vals.get('cron_frequency', rec.cron_frequency)
+                rec_vals = dict(vals, order_cycle_is_manual=(
+                    cycle != self._CYCLE_DEFAULTS.get(freq)
+                ))
+                res = super(SmartReorderConfig, rec).write(rec_vals) and res
+            if 'cron_frequency' in vals:
+                self._sync_cron_frequency()
+            return res
         res = super().write(vals)
         if 'cron_frequency' in vals:
             self._sync_cron_frequency()

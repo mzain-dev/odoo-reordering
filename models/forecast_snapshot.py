@@ -106,10 +106,14 @@ class ForecastSnapshot(models.Model):
                 for row in intervals
             )
 
+            # qty_delivered is stored in the sale LINE's UoM — convert to the
+            # product's UoM (qty / line_uom.factor * product_uom.factor, the
+            # same math as uom.uom._compute_quantity) so actuals are measured
+            # on the same basis as the forecast.
             self.env.cr.execute(f"""
                 SELECT
                     iv.snap_id,
-                    COALESCE(SUM(sol.qty_delivered), 0.0) AS actual_qty
+                    COALESCE(SUM(sol.qty_delivered / lu.factor * pu.factor), 0.0) AS actual_qty
                 FROM (
                     VALUES {values_sql}
                 ) AS iv (snap_id, company_id, warehouse_id, product_id, date_start, date_end)
@@ -122,6 +126,10 @@ class ForecastSnapshot(models.Model):
                 LEFT JOIN sale_order_line sol
                     ON  sol.order_id   = so.id
                     AND sol.product_id = iv.product_id
+                LEFT JOIN uom_uom lu ON lu.id = sol.product_uom
+                LEFT JOIN product_product pp ON pp.id = sol.product_id
+                LEFT JOIN product_template pt ON pt.id = pp.product_tmpl_id
+                LEFT JOIN uom_uom pu ON pu.id = pt.uom_id
                 GROUP BY iv.snap_id
             """)
             actuals_by_snap = {row[0]: row[1] for row in self.env.cr.fetchall()}

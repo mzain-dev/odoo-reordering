@@ -34,8 +34,9 @@
 
         <!--
         Record Rules: Multi-company isolation.
-        Users only see suggestions for their current company.
-        Admins/Managers can see all companies.
+        Everyone in the module's groups (Managers imply the User group, so
+        the rules apply to them too) only sees records for companies in
+        their allowed-companies set.
         -->
         <record id="rule_suggestion_company" model="ir.rule">
             <field name="name">Smart Reorder: Company isolation</field>
@@ -71,6 +72,19 @@
         <record id="rule_transfer_lane_company" model="ir.rule">
             <field name="name">Smart Reorder Transfer Lane: Company isolation</field>
             <field name="model_id" ref="model_smart_reorder_transfer_lane"/>
+            <field name="groups" eval="[(4, ref('group_smart_reorder_user'))]"/>
+            <field name="domain_force">
+                [('company_id', 'in', company_ids)]
+            </field>
+        </record>
+
+        <!-- Without this rule, any Reorder User could read every company's
+             forecast/demand history through the Back-testing menu — the
+             dashboard RPC filters explicitly, but the plain list view relied
+             on a record rule that didn't exist. -->
+        <record id="rule_forecast_snapshot_company" model="ir.rule">
+            <field name="name">Smart Reorder Forecast Snapshot: Company isolation</field>
+            <field name="model_id" ref="model_smart_reorder_forecast_snapshot"/>
             <field name="groups" eval="[(4, ref('group_smart_reorder_user'))]"/>
             <field name="domain_force">
                 [('company_id', 'in', company_ids)]

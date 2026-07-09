@@ -75,7 +75,7 @@
               name="📈 Observability Dashboard"
               parent="menu_smart_reorder_root"
               action="action_smart_reorder_observability_dashboard"
-              sequence="9"
+              sequence="10"
               groups="smart_reorder_advisor.group_smart_reorder_manager"/>
 
     <!-- Config -->

@@ -1,6 +1,10 @@
 from odoo import models, fields, api, _
 from odoo.exceptions import UserError
 
+from ..utils.access import require_group
+
+_MANAGER_GROUP = 'smart_reorder_advisor.group_smart_reorder_manager'
+
 
 class GenerateSuggestionsWizard(models.TransientModel):
     """
@@ -56,8 +60,11 @@ class GenerateSuggestionsWizard(models.TransientModel):
                 }
             }
 
+    @require_group(_MANAGER_GROUP)
     def action_generate(self):
-        """Run the analysis and return to the suggestions list."""
+        """Run the analysis and return to the suggestions list.
+        Manager-only: the menu entry is already restricted, but the method
+        itself must be guarded too — RPC does not respect menu groups."""
         self.ensure_one()
 
         company_ids = None

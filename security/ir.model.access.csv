@@ -3,7 +3,7 @@ access_suggestion_user,smart.reorder.suggestion user,model_smart_reorder_suggest
 access_suggestion_manager,smart.reorder.suggestion manager,model_smart_reorder_suggestion,smart_reorder_advisor.group_smart_reorder_manager,1,1,1,1
 access_config_user,smart.reorder.config user,model_smart_reorder_config,smart_reorder_advisor.group_smart_reorder_user,1,0,0,0
 access_config_manager,smart.reorder.config manager,model_smart_reorder_config,smart_reorder_advisor.group_smart_reorder_manager,1,1,1,1
-access_wizard_user,smart.reorder.wizard user,model_smart_reorder_wizard,smart_reorder_advisor.group_smart_reorder_user,1,1,1,1
+access_wizard_user,smart.reorder.wizard manager,model_smart_reorder_wizard,smart_reorder_advisor.group_smart_reorder_manager,1,1,1,1
 access_po_wizard_user,smart.reorder.po.wizard user,model_smart_reorder_po_wizard,smart_reorder_advisor.group_smart_reorder_user,1,1,1,1
 access_cron_log_user,smart.reorder.cron.log user,model_smart_reorder_cron_log,smart_reorder_advisor.group_smart_reorder_user,1,0,0,0
 access_cron_log_manager,smart.reorder.cron.log manager,model_smart_reorder_cron_log,smart_reorder_advisor.group_smart_reorder_manager,1,1,1,1

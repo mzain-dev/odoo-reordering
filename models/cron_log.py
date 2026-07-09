@@ -58,6 +58,33 @@ class SmartReorderCronLog(models.Model):
             else:
                 rec.duration_seconds = 0.0
 
+    def init(self):
+        super().init()
+        # The run-lock in generate_suggestions() is check-then-create; two
+        # workers can race past the check together. This partial unique index
+        # guarantees at most ONE 'running' log per company at the DB level —
+        # the loser's INSERT fails and that company's run is skipped.
+        # Dedupe first so index creation can't fail on a DB that already has
+        # several stuck 'running' rows for one company.
+        self.env.cr.execute("""
+            UPDATE smart_reorder_cron_log
+               SET status = 'aborted',
+                   error_notes = COALESCE(error_notes, '') ||
+                       ' Auto-aborted: duplicate running row cleaned up on module update.'
+             WHERE status = 'running'
+               AND id NOT IN (
+                    SELECT MAX(id)
+                      FROM smart_reorder_cron_log
+                     WHERE status = 'running'
+                     GROUP BY company_id
+               )
+        """)
+        self.env.cr.execute("""
+            CREATE UNIQUE INDEX IF NOT EXISTS smart_reorder_cron_log_running_uniq
+                ON smart_reorder_cron_log (company_id)
+             WHERE status = 'running'
+        """)
+
 
 class SmartReorderObservabilityDashboard(models.TransientModel):
     _name = 'smart.reorder.observability.dashboard'

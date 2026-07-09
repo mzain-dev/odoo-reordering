@@ -1,12 +1,15 @@
 from odoo import models, fields, api, _, Command
-from odoo.exceptions import UserError
+from odoo.exceptions import AccessError, UserError
 from datetime import date, timedelta
 from dateutil.relativedelta import relativedelta
-import math
+from psycopg2 import IntegrityError
 import logging
-import base64
 import time
-import statistics
+
+from ..utils.access import require_group
+
+_MANAGER_GROUP = 'smart_reorder_advisor.group_smart_reorder_manager'
+_USER_GROUP = 'smart_reorder_advisor.group_smart_reorder_user'
 
 _logger = logging.getLogger(__name__)
 
@@ -443,6 +446,7 @@ class SmartReorderSuggestion(models.Model):
     # ══════════════════════════════════════════════════════════════════════════
 
     @api.model
+    @require_group(_MANAGER_GROUP)
     def generate_suggestions(self, company_ids=None, warehouse_ids=None,
                              include_zero_demand=False,  # ← NEW param
                              _cron_start=None,           # ← T-19: safety cap
@@ -562,12 +566,24 @@ class SmartReorderSuggestion(models.Model):
                                     f'(held longer than {STUCK_LOCK_TIMEOUT_SECS}s).',
                 })
 
-            log = CronLog.create({
-                'company_id': company.id,
-                'started_at': now,
-                'trigger_type': trigger_type,
-                'status': 'running',
-            })
+            # The check above is check-then-create, so two workers can race
+            # past it together; the partial unique index on (company_id)
+            # WHERE status='running' (see SmartReorderCronLog.init) makes the
+            # second INSERT fail here instead of double-running the company.
+            try:
+                with self.env.cr.savepoint():
+                    log = CronLog.create({
+                        'company_id': company.id,
+                        'started_at': now,
+                        'trigger_type': trigger_type,
+                        'status': 'running',
+                    })
+            except IntegrityError:
+                _logger.warning(
+                    'SmartReorder: Skipping %s — another worker started a run '
+                    'concurrently. Will retry next run.', company.name
+                )
+                continue
             try:
                 comp_include_zero = config.cron_include_zero_demand if trigger_type == 'cron' else include_zero_demand
                 created, critical, had_errors = self._generate_for_company(
@@ -598,6 +614,48 @@ class SmartReorderSuggestion(models.Model):
         _logger.info('SmartReorder: Done. %d records. %d critical.', total_created, total_critical)
         return {'created': total_created, 'critical': total_critical}
 
+    # UoM-safe conversion expression: sale.order.line.qty_delivered is stored
+    # in the LINE's UoM, not the product's. qty_in_product_uom =
+    # qty / line_uom.factor * product_uom.factor (same math as
+    # uom.uom._compute_quantity). Summing raw qty_delivered understates a
+    # dozen-sold/unit-stocked product by 12x.
+    _SALE_QTY_EXPR = "SUM(sol.qty_delivered / lu.factor * pu.factor)"
+    _SALE_QTY_JOINS = """
+          JOIN sale_order so ON so.id = sol.order_id
+          JOIN product_product pp ON pp.id = sol.product_id
+          JOIN product_template pt ON pt.id = pp.product_tmpl_id
+          JOIN uom_uom lu ON lu.id = sol.product_uom
+          JOIN uom_uom pu ON pu.id = pt.uom_id
+    """
+
+    def _sales_qty_by_product(self, company_id, warehouse_id, date_from, date_to_excl,
+                              product_ids=None, storable_only=False):
+        """Confirmed sales per product over [date_from, date_to_excl), summed
+        in the PRODUCT's UoM. Returns {product_id: qty}."""
+        params = [company_id, warehouse_id, str(date_from), str(date_to_excl)]
+        extra = ''
+        if storable_only:
+            extra += (" AND pt.type = 'product'"
+                      " AND COALESCE(pt.exclude_from_reorder_advisor, false) = false")
+        if product_ids is not None:
+            if not product_ids:
+                return {}
+            extra += " AND sol.product_id = ANY(%s)"
+            params.append(list(product_ids))
+        self.env.cr.execute(f"""
+            SELECT sol.product_id, {self._SALE_QTY_EXPR}
+              FROM sale_order_line sol
+              {self._SALE_QTY_JOINS}
+             WHERE so.state = 'sale'
+               AND so.company_id = %s
+               AND so.warehouse_id = %s
+               AND so.date_order >= %s
+               AND so.date_order < %s
+               {extra}
+             GROUP BY sol.product_id
+        """, tuple(params))
+        return {row[0]: row[1] or 0.0 for row in self.env.cr.fetchall()}
+
     def _fetch_warehouse_data(self, company, config, warehouse, dates, include_zero_demand,
                               tmpl_to_prod, prod_by_id, warehouse_by_location, warehouses):
         """
@@ -622,20 +680,10 @@ class SmartReorderSuggestion(models.Model):
         analysis_months = dates['analysis_months']
         comparison_months = dates['comparison_months']
 
-        sale_data = self.env['sale.order.line'].sudo().read_group(
-            domain=[
-                ('order_id.state',        '=',  'sale'),
-                ('order_id.company_id',   '=',  company.id),
-                ('order_id.warehouse_id', '=',  warehouse.id),
-                ('order_id.date_order',   '>=', str(date_from)),
-                ('order_id.date_order',   '<', str(date_to + timedelta(days=1))),
-                ('product_id.type',       '=',  'product'),
-                ('product_id.product_tmpl_id.exclude_from_reorder_advisor', '=', False),
-            ],
-            fields=['product_id', 'qty_delivered:sum'],
-            groupby=['product_id'],
+        qty_map = self._sales_qty_by_product(
+            company.id, warehouse.id, date_from, date_to + timedelta(days=1),
+            storable_only=True,
         )
-        qty_map = {r['product_id'][0]: r['qty_delivered'] for r in sale_data}
         product_ids_with_sales = list(qty_map.keys())
 
         # ── Q2: On-hand stock ──
@@ -723,9 +771,20 @@ class SmartReorderSuggestion(models.Model):
             for r in missing_quants:
                 onhand_map[r['product_id'][0]] = r['quantity']
 
-        # Archive orphans
-        orphan_ids = [r.id for pid, r in existing_map.items()
-                      if pid not in set(product_ids_with_sales) and r.active]
+        # Archive orphans. When zero-demand products are EXCLUDED from this
+        # run (manual wizard default), products with stock but no sales are
+        # legitimately absent from the scope — archiving their suggestions
+        # here made every quick manual refresh empty the Dead Stock view
+        # until the next full cron. In that case only archive suggestions
+        # whose product is genuinely gone from the advisor's universe
+        # (archived, non-storable, or flagged excluded — i.e. not in
+        # prod_by_id); a zero-demand-inclusive run still archives all orphans.
+        scope_set = set(product_ids_with_sales)
+        orphan_ids = [
+            r.id for pid, r in existing_map.items()
+            if pid not in scope_set and r.active
+            and (include_zero_demand or pid not in prod_by_id)
+        ]
         if orphan_ids:
             self.sudo().browse(orphan_ids).write({'active': False})
 
@@ -738,12 +797,12 @@ class SmartReorderSuggestion(models.Model):
         monthly_qty_by_product = {
             pid: [0.0] * analysis_months for pid in product_ids_with_sales
         }
-        self.env.cr.execute("""
+        self.env.cr.execute(f"""
             SELECT sol.product_id,
                    date_trunc('month', so.date_order)::date AS sale_month,
-                   SUM(sol.qty_delivered)
+                   {self._SALE_QTY_EXPR}
               FROM sale_order_line sol
-              JOIN sale_order so ON sol.order_id = so.id
+              {self._SALE_QTY_JOINS}
              WHERE so.state         = 'sale'
                AND so.company_id     = %s
                AND so.warehouse_id   = %s
@@ -796,19 +855,10 @@ class SmartReorderSuggestion(models.Model):
 
         # ── Q1c: Current month sales ──
         current_month_start = date.today().replace(day=1)
-        self.env.cr.execute("""
-            SELECT sol.product_id, SUM(sol.qty_delivered)
-              FROM sale_order_line sol
-              JOIN sale_order so ON sol.order_id = so.id
-             WHERE so.state         = 'sale'
-               AND so.company_id     = %s
-               AND so.warehouse_id   = %s
-               AND so.date_order    >= %s
-               AND so.date_order    < %s
-               AND sol.product_id    = ANY(%s)
-             GROUP BY sol.product_id
-        """, (company.id, warehouse.id, str(current_month_start), str(date.today() + timedelta(days=1)), product_ids_with_sales))
-        current_month_sales_map = {row[0]: row[1] for row in self.env.cr.fetchall()}
+        current_month_sales_map = self._sales_qty_by_product(
+            company.id, warehouse.id, current_month_start, date.today() + timedelta(days=1),
+            product_ids=product_ids_with_sales,
+        )
 
         # ── Q3: Incoming PO qty ──
         po_lines = self.env['purchase.order.line'].sudo().search_read(
@@ -818,8 +868,12 @@ class SmartReorderSuggestion(models.Model):
                 ('order_id.picking_type_id.warehouse_id', '=', warehouse.id),
                 ('product_id',          'in', product_ids_with_sales),
             ],
-            fields=['product_id', 'product_qty', 'qty_received', 'date_planned']
+            fields=['product_id', 'product_qty', 'qty_received', 'date_planned', 'product_uom']
         )
+        # product_qty / qty_received are in the PO line's UoM — convert to the
+        # product's UoM before mixing with stock quantities.
+        line_uom_ids = {l['product_uom'][0] for l in po_lines if l.get('product_uom')}
+        uoms_by_id = {u.id: u for u in self.env['uom.uom'].sudo().browse(list(line_uom_ids))}
         incoming_map = {}
         overdue_map = {}
         for line in po_lines:
@@ -828,6 +882,10 @@ class SmartReorderSuggestion(models.Model):
             qty_received = line['qty_received'] or 0.0
             net_qty = max(0.0, qty_ordered - qty_received)
             if net_qty > 0.0:
+                prod = prod_by_id.get(pid)
+                line_uom = uoms_by_id.get(line['product_uom'][0]) if line.get('product_uom') else None
+                if prod and line_uom and line_uom != prod.uom_id:
+                    net_qty = line_uom._compute_quantity(net_qty, prod.uom_id, round=False)
                 incoming_map[pid] = incoming_map.get(pid, 0.0) + net_qty
                 planned_dt = line['date_planned']
                 if planned_dt and planned_dt.date() < date.today():
@@ -949,34 +1007,16 @@ class SmartReorderSuggestion(models.Model):
                     actual_lead_map[(pid, partner_id)] = round(float(avg_days), 1)
 
         # ── Q7: Batch previous period sales ──
-        prev_sale_data = self.env['sale.order.line'].sudo().read_group(
-            domain=[
-                ('order_id.state',        '=',  'sale'),
-                ('order_id.company_id',   '=',  company.id),
-                ('order_id.warehouse_id', '=',  warehouse.id),
-                ('order_id.date_order',   '>=', str(prev_date_from)),
-                ('order_id.date_order',   '<',  str(prev_date_to + timedelta(days=1))),
-                ('product_id',            'in', product_ids_with_sales),
-            ],
-            fields=['product_id', 'qty_delivered:sum'],
-            groupby=['product_id'],
+        prev_qty_map = self._sales_qty_by_product(
+            company.id, warehouse.id, prev_date_from, prev_date_to + timedelta(days=1),
+            product_ids=product_ids_with_sales,
         )
-        prev_qty_map = {r['product_id'][0]: r['qty_delivered'] for r in prev_sale_data}
 
         # ── Q8: Batch last-year same period ──
-        ly_sale_data = self.env['sale.order.line'].sudo().read_group(
-            domain=[
-                ('order_id.state',        '=',  'sale'),
-                ('order_id.company_id',   '=',  company.id),
-                ('order_id.warehouse_id', '=',  warehouse.id),
-                ('order_id.date_order',   '>=', str(ly_date_from)),
-                ('order_id.date_order',   '<',  str(ly_date_to + timedelta(days=1))),
-                ('product_id',            'in', product_ids_with_sales),
-            ],
-            fields=['product_id', 'qty_delivered:sum'],
-            groupby=['product_id'],
+        ly_qty_map = self._sales_qty_by_product(
+            company.id, warehouse.id, ly_date_from, ly_date_to + timedelta(days=1),
+            product_ids=product_ids_with_sales,
         )
-        ly_qty_map = {r['product_id'][0]: r['qty_delivered'] for r in ly_sale_data}
 
         # ── Q2c: Global stock map ──
         global_quant_data = self.env['stock.quant'].sudo().read_group(
@@ -1000,10 +1040,10 @@ class SmartReorderSuggestion(models.Model):
                 global_stock_map[pid][wh.id] += qty
 
         # ── Global sales ──
-        self.env.cr.execute("""
-            SELECT sol.product_id, so.warehouse_id, SUM(sol.qty_delivered)
+        self.env.cr.execute(f"""
+            SELECT sol.product_id, so.warehouse_id, {self._SALE_QTY_EXPR}
               FROM sale_order_line sol
-              JOIN sale_order so ON sol.order_id = so.id
+              {self._SALE_QTY_JOINS}
              WHERE so.state        = 'sale'
                AND so.company_id    = %s
                AND so.date_order   >= %s
@@ -1396,11 +1436,30 @@ class SmartReorderSuggestion(models.Model):
                             )
                             to_create.append(vals)
 
+                    # These keys are needed in-run (budget ranking, needs-review
+                    # triage) but are stored COMPUTED fields on the model with
+                    # no inverse — persisting them is at best a no-op the ORM
+                    # recomputes identically, so strip them before writing.
+                    _computed_keys = (
+                        'estimated_purchase_value',
+                        'months_of_stock_after_order',
+                        'is_overstocked',
+                    )
+                    # tracking_disable: these are machine-refreshed advisory
+                    # rows updated in bulk every run; per-field chatter tracking
+                    # here generated thousands of mail messages per cron on a
+                    # large catalog. The run log is the audit trail.
+                    Sugg = self.sudo().with_context(tracking_disable=True)
                     if to_create:
-                        self.sudo().create(to_create)
+                        for vals in to_create:
+                            for key in _computed_keys:
+                                vals.pop(key, None)
+                        Sugg.create(to_create)
                         total_created += len(to_create)
                     for rec, vals in to_write:
-                        rec.sudo().write(vals)
+                        for key in _computed_keys:
+                            vals.pop(key, None)
+                        rec.sudo().with_context(tracking_disable=True).write(vals)
                         total_created += 1
 
                     Snapshot = self.env['smart.reorder.forecast.snapshot'].sudo()
@@ -1449,9 +1508,11 @@ class SmartReorderSuggestion(models.Model):
                     _logger.info('SmartReorder: %d created / %d updated for %s/%s',
                         len(to_create), len(to_write), company.name, warehouse.name)
             except Exception as e:
-                # batch (e.g. orphan archiving) and restored a clean transaction,
-                # so the search/write calls below are guaranteed to work even if
-                # the failure was a genuine DB error, not just a Python exception.
+                # The savepoint above rolled back everything this warehouse's
+                # batch did (e.g. orphan archiving) and restored a clean
+                # transaction, so the search/write calls below are guaranteed
+                # to work even if the failure was a genuine DB error, not just
+                # a Python exception.
                 had_errors = True
                 _logger.exception(
                     'SmartReorder: Batch failed for %s/%s — falling back to existing '
@@ -1575,7 +1636,11 @@ class SmartReorderSuggestion(models.Model):
     # ── Phase 3: Auto-flag on negative delivery ───────────────────────────────
 
     @api.model
-    def flag_negative_stock_product(self, product_id, warehouse_id, company_id):
+    def _flag_negative_stock_product(self, product_id, warehouse_id, company_id):
+        # Private (underscore) on purpose: this creates/overwrites suggestions
+        # via sudo with caller-chosen product/warehouse/company, so it must not
+        # be reachable over RPC. It is only called from the stock.picking
+        # validation hook, which runs for whichever user validates a delivery.
         config = self._get_config(company_id)
         if not config.auto_flag_on_negative:
             return
@@ -1597,14 +1662,8 @@ class SmartReorderSuggestion(models.Model):
         ], order='sequence asc', limit=1)
 
         moq = supplierinfo.min_qty or 1.0 if supplierinfo else 1.0
-        
-        # Helper function for MOQ rounding
-        def round_to_moq(qty, moq_val):
-            if moq_val <= 0:
-                return qty
-            import math
-            return math.ceil(qty / moq_val) * moq_val
 
+        round_to_moq = self._round_to_moq
         abs_neg_qty = abs(qty_on_hand) if qty_on_hand < 0 else 0.0
         
         existing = self.sudo().with_context(active_test=False).search([
@@ -1666,24 +1725,21 @@ class SmartReorderSuggestion(models.Model):
         else:
             suggested_qty = round_to_moq(abs_neg_qty, moq)
 
-        reorder_value = suggested_qty * cost
-        estimated_purchase_value = suggested_qty * vendor_price
-
         notes = (
             f'⚠️ AUTO-FLAGGED (PROVISIONAL): Stock went negative to {qty_on_hand:.2f} on {date.today()}.\n'
             f'Provisional emergency suggestion computed: rounded to MOQ={moq:.0f}.\n'
             f'Run full analysis to recalculate complete suggestion.'
         )
 
+        # qty_available, reorder_value and estimated_purchase_value are stored
+        # computed fields — the ORM derives them from the plain fields written
+        # below, so they are deliberately absent from this vals dict.
         vals = {
             'company_id':               company_id,
             'warehouse_id':             warehouse_id,
             'product_id':               product_id,
             'qty_on_hand':              qty_on_hand,
-            'qty_available':            qty_on_hand + (existing.qty_incoming if existing else 0.0) - (existing.qty_outgoing if existing else 0.0),
             'suggested_reorder_qty':    suggested_qty,
-            'reorder_value':            reorder_value,
-            'estimated_purchase_value': estimated_purchase_value,
             'urgency':                  'critical',
             'reorder_needed':           True,
             'is_provisional':           True,
@@ -1782,6 +1838,15 @@ class SmartReorderSuggestion(models.Model):
             raise UserError(_('No transfer source warehouse recommended.'))
         if not self.reorder_needed:
             raise UserError(_('This suggestion does not require any replenishment.'))
+        # Use the donor-surplus-capped quantity, NOT the full reorder qty —
+        # transferring the full reorder qty could strip the donor warehouse
+        # below its own lead-time demand, which the cap exists to prevent.
+        transfer_qty = self.transfer_suggested_qty
+        if transfer_qty <= 0:
+            raise UserError(_(
+                'No transferable surplus quantity is recorded for this suggestion. '
+                'Re-run the analysis to refresh the transfer recommendation.'
+            ))
 
         # Find internal transfer picking type for destination warehouse
         picking_type = self.env['stock.picking.type'].sudo().search([
@@ -1806,7 +1871,7 @@ class SmartReorderSuggestion(models.Model):
             'move_ids': [Command.create({
                 'name': self.product_id.display_name,
                 'product_id': self.product_id.id,
-                'product_uom_qty': self.suggested_reorder_qty,
+                'product_uom_qty': transfer_qty,
                 'product_uom': self.product_id.uom_id.id,
                 'location_id': self.transfer_source_warehouse_id.lot_stock_id.id,
                 'location_dest_id': self.warehouse_id.lot_stock_id.id,
@@ -1888,22 +1953,47 @@ class SmartReorderSuggestion(models.Model):
         }
         dead_cnt = Suggestion.search_count(base_domain + [('is_dead_stock', '=', True)])
 
-        # ── Reorder value + within-budget value/count — one grouped sum query ──
+        # ── Sales pattern counts (the OWL dashboard's pattern KPI tiles) ──
+        pattern_counts = {
+            g['sales_pattern']: g.get('__count') or g.get('sales_pattern_count') or 0
+            for g in Suggestion.read_group(base_domain, ['sales_pattern'], ['sales_pattern'])
+            if g['sales_pattern']
+        }
+
+        # ── Reorder value + within-budget value/count — grouped sums, converted
+        # per-currency: in a multi-company view the records can carry different
+        # currencies, and summing raw amounts across currencies produced a
+        # meaningless headline number. Everything is expressed in the current
+        # company's currency. ──
+        target_currency = self.env.company.currency_id
+
+        def _to_target(amount, currency_id):
+            if not amount:
+                return 0.0
+            if not currency_id or currency_id == target_currency.id:
+                return amount
+            return self.env['res.currency'].sudo().browse(currency_id)._convert(
+                amount, target_currency, self.env.company, fields.Date.today()
+            )
+
         budget_groups = Suggestion.read_group(
             base_domain + [('reorder_needed', '=', True)],
-            ['estimated_purchase_value:sum'], ['within_budget'],
+            ['estimated_purchase_value:sum'], ['within_budget', 'currency_id'],
+            lazy=False,
         )
-        total_rv = sum(g['estimated_purchase_value'] or 0.0 for g in budget_groups)
-        budget_group = next((g for g in budget_groups if g['within_budget']), None)
-        budget_rv  = budget_group['estimated_purchase_value'] if budget_group else 0.0
-        budget_cnt = (budget_group.get('__count') or budget_group.get('within_budget_count') or 0) if budget_group else 0
+        total_rv = 0.0
+        budget_rv = 0.0
+        budget_cnt = 0
+        for g in budget_groups:
+            cid = g['currency_id'][0] if g.get('currency_id') else False
+            amount = _to_target(g.get('estimated_purchase_value') or 0.0, cid)
+            total_rv += amount
+            if g.get('within_budget'):
+                budget_rv += amount
+                budget_cnt += g.get('__count') or 0
+        currency = target_currency.name
 
-        # ── Currency + last analysis date — single small lookups, not a full scan ──
-        currency_rec = Suggestion.search_read(base_domain, ['currency_id'], limit=1)
-        currency = (
-            currency_rec[0]['currency_id'][1]
-            if currency_rec and currency_rec[0].get('currency_id') else ''
-        )
+        # ── Last analysis date — single small lookup, not a full scan ──
         date_group = Suggestion.read_group(base_domain, ['analysis_date:max'], [])
         last_date = (
             str(date_group[0]['analysis_date'])
@@ -1990,6 +2080,7 @@ class SmartReorderSuggestion(models.Model):
             [('company_id', 'in', company_ids)], ['id', 'name', 'company_id'], limit=50)
         return {
             'urgency': urgency_counts, 'abc': abc_counts, 'trend': trend_counts,
+            'sales_pattern': pattern_counts,
             'total_reorder_value': total_rv, 'within_budget_value': budget_rv,
             'budget_count': budget_cnt, 'dead_count': dead_cnt,
             'currency': currency, 'last_analysis_date': last_date,
@@ -1998,6 +2089,22 @@ class SmartReorderSuggestion(models.Model):
         }
 
     # ── Utility actions ───────────────────────────────────────────────────────
+
+    def _check_snooze_access(self):
+        """Snoozing is a buyer (Reorder User) capability. The snooze actions
+        write via sudo() because the User group is otherwise read-only on this
+        model, so the group must be checked explicitly here — without it, ANY
+        authenticated user could suppress reorder flags over RPC."""
+        if not self.env.user.has_group(_USER_GROUP):
+            raise AccessError(_(
+                'Snoozing suggestions requires the Reorder Advisor User group.'
+            ))
+        allowed_company_ids = set(self.env.user.company_ids.ids)
+        for rec in self:
+            if rec.company_id.id not in allowed_company_ids:
+                raise AccessError(_(
+                    'You do not have access to company %s.'
+                ) % rec.company_id.name)
 
     # T-17: Snooze actions
     def action_snooze(self):
@@ -2017,6 +2124,7 @@ class SmartReorderSuggestion(models.Model):
     def action_snooze_7(self):
         """Snooze this suggestion for 7 days. Records audit note automatically."""
         self.ensure_one()
+        self._check_snooze_access()
         self.sudo().write({
             'snoozed_until': date.today() + timedelta(days=7),
             'snoozed_note':  f'Snoozed 7 days by {self.env.user.name} on {date.today()}',
@@ -2026,6 +2134,7 @@ class SmartReorderSuggestion(models.Model):
     def action_snooze_30(self):
         """Snooze this suggestion for 30 days. Records audit note automatically."""
         self.ensure_one()
+        self._check_snooze_access()
         self.sudo().write({
             'snoozed_until': date.today() + timedelta(days=30),
             'snoozed_note':  f'Snoozed 30 days by {self.env.user.name} on {date.today()}',
@@ -2035,6 +2144,7 @@ class SmartReorderSuggestion(models.Model):
     def action_unsnooze(self):
         """Clear the snooze — the next cron run will re-evaluate this product."""
         self.ensure_one()
+        self._check_snooze_access()
         self.sudo().write({
             'snoozed_until': False,
             'snoozed_note': False,
@@ -2057,6 +2167,7 @@ class SmartReorderSuggestion(models.Model):
     def _bulk_snooze(self, days):
         if not self:
             return
+        self._check_snooze_access()
         self.sudo().write({
             'snoozed_until':  date.today() + timedelta(days=days),
             'snoozed_note':   f'Bulk-snoozed {days} days by {self.env.user.name} on '

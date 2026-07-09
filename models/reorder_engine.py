@@ -477,15 +477,18 @@ def calculate_product_suggestion(
             transfer_source_wh_id, config_data['default_internal_transfer_days']
         )
 
+    # Raw-vs-raw comparison basis: the previous-period and last-year figures
+    # are raw sales totals, so the current side must be too. Comparing the
+    # outlier-CLEANED current total against a raw prior total made a spike
+    # excluded from the current window read as artificial "falling demand".
     prev_qty_val = prev_qty or 0.0
     trend, trend_pct = calc_trend(
-        avg_monthly * analysis_months, prev_qty_val, analysis_months, comparison_months
+        total_sold, prev_qty_val, analysis_months, comparison_months
     )
 
     ly_qty_val = ly_qty or 0.0
-    seasonal_note = calc_seasonal_note(clean_total_sold, ly_qty_val)
+    seasonal_note = calc_seasonal_note(total_sold, ly_qty_val)
 
-    reorder_value = suggested_qty * cost
     est_purchase_val = suggested_qty * price_company_currency
 
     lead_time_desc = f'Lead time: {lead_months:.2f} months ({stated_lead_days} days stated)'

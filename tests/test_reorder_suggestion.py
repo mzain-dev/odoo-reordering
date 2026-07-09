@@ -2031,15 +2031,19 @@ class TestDashboardData(TransactionCase):
         cls.p_other_wh = make_product('Dash Other Warehouse Widget')
 
         common = {'company_id': cls.company.id, 'warehouse_id': cls.warehouse.id}
+        # The dashboard's value tiles sum estimated_purchase_value (vendor-price
+        # basis) — a stored computed field (suggested_reorder_qty * vendor_price),
+        # so the fixtures drive it through those two inputs (20*5=100, 20*10=200)
+        # instead of writing a raw amount the compute would not reproduce.
         cls.Suggestion.create([
             dict(common, product_id=cls.p_critical.id, urgency='critical', abc_class='A',
                  demand_trend='down', trend_pct=-10.0, is_dead_stock=False,
-                 reorder_needed=True, within_budget=True, reorder_value=100.0,
+                 reorder_needed=True, within_budget=True, vendor_price=5.0,
                  qty_on_hand=-5.0, suggested_reorder_qty=20.0),
             dict(common, product_id=cls.p_urgent.id, urgency='urgent', abc_class='B',
                  demand_trend='up', trend_pct=30.0, is_dead_stock=False,
-                 reorder_needed=True, within_budget=False, reorder_value=200.0,
-                 months_of_stock=0.5, avg_monthly_demand=10.0, suggested_reorder_qty=15.0),
+                 reorder_needed=True, within_budget=False, vendor_price=10.0,
+                 months_of_stock=0.5, avg_monthly_demand=10.0, suggested_reorder_qty=20.0),
             dict(common, product_id=cls.p_dead.id, urgency='dead', abc_class='C',
                  demand_trend='stable', is_dead_stock=True, reorder_needed=False,
                  within_budget=True, reorder_value=0.0,
@@ -3321,7 +3325,7 @@ class TestReorderProvisionalNegativeStock(TransactionCase):
         # generate_suggestions() run and expects a plain average (12/6=2.0).
         # A single month that size would otherwise be excluded as a one-time
         # spike (Fix 2), zeroing the forecast — bulk_regular bypasses that.
-        # flag_negative_stock_product() (parts 1-2) doesn't consult
+        # _flag_negative_stock_product() (parts 1-2) doesn't consult
         # reorder_behavior at all, so this has no effect on those assertions.
         product.product_tmpl_id.reorder_behavior = 'bulk_regular'
 
@@ -3336,7 +3340,7 @@ class TestReorderProvisionalNegativeStock(TransactionCase):
 
         # Set stock negative: let's mock it by editing standard stock quants or manually driving negative.
         # But we can also simulate the flag call directly:
-        # Since flag_negative_stock_product reads quants, we create a quant with quantity -3.0
+        # Since _flag_negative_stock_product reads quants, we create a quant with quantity -3.0
         # In Odoo, negative quants represent negative stock.
         self.env['stock.quant'].create({
             'product_id': product.id,
@@ -3345,7 +3349,7 @@ class TestReorderProvisionalNegativeStock(TransactionCase):
         })
 
         # 1. No prior suggestion exists
-        self.env['smart.reorder.suggestion'].flag_negative_stock_product(
+        self.env['smart.reorder.suggestion']._flag_negative_stock_product(
             product.id, warehouse.id, company.id
         )
 
@@ -3378,7 +3382,7 @@ class TestReorderProvisionalNegativeStock(TransactionCase):
             ('location_id', '=', warehouse.lot_stock_id.id),
         ]).write({'quantity': -5.0})
 
-        self.env['smart.reorder.suggestion'].flag_negative_stock_product(
+        self.env['smart.reorder.suggestion']._flag_negative_stock_product(
             product.id, warehouse.id, company.id
         )
 
@@ -3427,7 +3431,7 @@ class TestReorderProvisionalNegativeStock(TransactionCase):
 class TestMultiCompanyProductCost(TransactionCase):
     """standard_price is a company-dependent property field. Both the bulk
     cost fetch in _fetch_warehouse_data() (Q4) and the cost read in
-    flag_negative_stock_product() must resolve it within the context of the
+    _flag_negative_stock_product() must resolve it within the context of the
     company being analyzed/flagged — not whatever company the ORM defaults to
     under sudo() — or a multi-company setup prices suggestions with the wrong
     company's average cost."""
@@ -3518,10 +3522,10 @@ class TestMultiCompanyProductCost(TransactionCase):
             'quantity': -2.0,
         })
 
-        self.env['smart.reorder.suggestion'].flag_negative_stock_product(
+        self.env['smart.reorder.suggestion']._flag_negative_stock_product(
             self.product.id, self.warehouse_a.id, self.company_a.id
         )
-        self.env['smart.reorder.suggestion'].flag_negative_stock_product(
+        self.env['smart.reorder.suggestion']._flag_negative_stock_product(
             self.product.id, self.warehouse_b.id, self.company_b.id
         )
 

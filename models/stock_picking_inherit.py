@@ -1,5 +1,5 @@
 from datetime import date
-from odoo import models, api
+from odoo import models
 import logging
 
 _logger = logging.getLogger(__name__)
@@ -56,7 +56,7 @@ class StockPicking(models.Model):
                             product_id, warehouse.name, picking.name
                         )
                         self.env['smart.reorder.suggestion'] \
-                            .flag_negative_stock_product(
+                            ._flag_negative_stock_product(
                             product_id=product_id,
                             warehouse_id=warehouse.id,
                             company_id=picking.company_id.id,
@@ -118,21 +118,37 @@ class StockPicking(models.Model):
                 )
                 onhand_map = {r['product_id'][0]: r['quantity'] for r in quant_data}
 
-                # Q2: Remaining incoming PO qty (open PO lines, not yet received)
-                incoming_data = self.env['purchase.order.line'].sudo().read_group(
+                # Q2: Remaining incoming PO qty (open PO lines, not yet received).
+                # Quantities are per-line in the PO line's UoM — convert to the
+                # product's UoM before mixing with stock figures, and net out
+                # per line (a grouped sum of ordered minus received is only
+                # correct when every line shares one UoM).
+                incoming_lines = self.env['purchase.order.line'].sudo().search_read(
                     domain=[
                         ('order_id.state',      'in', ['purchase', 'done']),
                         ('order_id.company_id', '=',  picking.company_id.id),
                         ('order_id.picking_type_id.warehouse_id', '=', warehouse.id),
                         ('product_id',          'in',  product_ids_received),
                     ],
-                    fields=['product_id', 'product_qty:sum', 'qty_received:sum'],
-                    groupby=['product_id'],
+                    fields=['product_id', 'product_qty', 'qty_received', 'product_uom'],
                 )
-                incoming_map = {
-                    r['product_id'][0]: max(0.0, r['product_qty'] - r['qty_received'])
-                    for r in incoming_data
+                products_by_id = {
+                    p.id: p for p in
+                    self.env['product.product'].sudo().browse(product_ids_received)
                 }
+                uom_ids = {l['product_uom'][0] for l in incoming_lines if l.get('product_uom')}
+                uoms_by_id = {u.id: u for u in self.env['uom.uom'].sudo().browse(list(uom_ids))}
+                incoming_map = {}
+                for l in incoming_lines:
+                    net = max(0.0, (l['product_qty'] or 0.0) - (l['qty_received'] or 0.0))
+                    if net <= 0.0:
+                        continue
+                    pid = l['product_id'][0]
+                    prod = products_by_id.get(pid)
+                    line_uom = uoms_by_id.get(l['product_uom'][0]) if l.get('product_uom') else None
+                    if prod and line_uom and line_uom != prod.uom_id:
+                        net = line_uom._compute_quantity(net, prod.uom_id, round=False)
+                    incoming_map[pid] = incoming_map.get(pid, 0.0) + net
 
                 for sug in suggestions:
                     pid            = sug.product_id.id

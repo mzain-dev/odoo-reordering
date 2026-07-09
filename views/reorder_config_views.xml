@@ -34,6 +34,8 @@
                                 <field name="analysis_period" widget="radio"/>
                                 <field name="safety_buffer_months"/>
                                 <field name="order_cycle_months"/>
+                                <field name="order_cycle_is_manual" readonly="1"
+                                       invisible="not order_cycle_is_manual"/>
                                 <field name="default_lead_time_months"/>
                             </group>
                         </div>

@@ -89,9 +89,15 @@ class ExportSuggestionsWizard(models.TransientModel):
     @api.model
     def _build_xlsx(self, suggestions):
         """Pure data → bytes — no DB writes, easy to unit test directly."""
-        from openpyxl import Workbook
-        from openpyxl.styles import Alignment, Font, PatternFill
-        from openpyxl.utils import get_column_letter
+        try:
+            from openpyxl import Workbook
+            from openpyxl.styles import Alignment, Font, PatternFill
+            from openpyxl.utils import get_column_letter
+        except ImportError:
+            raise UserError(_(
+                'The Python package "openpyxl" is required for Excel export '
+                'but is not installed on this server.'
+            ))
 
         wb = Workbook()
         ws = wb.active
