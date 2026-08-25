@@ -37,38 +37,19 @@ def send_notifications(self, company, config, critical_count, warehouse_id=None)
     currency = company.currency_id.symbol or ''
     critical_items = Suggestion.search(critical_domain, limit=10)
 
-    company_name = html_escape(company.name)
-    body_lines = [
-        f'<h3>📦 Smart Reorder Advisor — {company_name}</h3>',
-        f'<p>Analysis completed on <strong>{date.today()}</strong></p>',
-        f'<table style="border-collapse:collapse;width:100%;">',
-        f'<tr style="background:#f5f5f5;"><td style="padding:8px;"><strong>🔴 Critical</strong></td>'
-        f'<td style="padding:8px;"><strong>{n_critical}</strong></td></tr>',
-        f'<tr><td style="padding:8px;">🟠 Urgent</td><td style="padding:8px;"><strong>{n_urgent}</strong></td></tr>',
-        f'<tr style="background:#f5f5f5;"><td style="padding:8px;">💀 Dead Stock</td><td style="padding:8px;"><strong>{n_dead}</strong></td></tr>',
-        f'<tr><td style="padding:8px;">💰 Total Est. Purchase Value</td><td style="padding:8px;"><strong>{currency} {total_value:,.2f}</strong></td></tr>',
-        f'</table>',
-    ]
-
-    if critical_items:
-        body_lines += [
-            '<p><strong>Critical Items (top 10):</strong></p>',
-            '<table style="border-collapse:collapse;width:100%;font-size:12px;">',
-            '<tr style="background:#e74c3c;color:white;"><th style="padding:6px;">Part No.</th>',
-            '<th style="padding:6px;">Product</th><th style="padding:6px;">On Hand</th>',
-            '<th style="padding:6px;">Suggest</th><th style="padding:6px;">Value</th></tr>',
-        ]
-        for item in critical_items:
-            body_lines.append(
-                f'<tr style="background:#fdecea;"><td style="padding:5px;">{html_escape(item.default_code or "—")}</td>'
-                f'<td style="padding:5px;">{html_escape(item.product_id.display_name)}</td>'
-                f'<td style="padding:5px;color:#e74c3c;"><strong>{item.qty_on_hand:.0f}</strong></td>'
-                f'<td style="padding:5px;"><strong>{item.suggested_reorder_qty:.0f}</strong></td>'
-                f'<td style="padding:5px;">{currency} {item.estimated_purchase_value:,.2f}</td></tr>'
-            )
-        body_lines.append('</table>')
-
-    body_lines.append('<p>Open <strong>Reorder Advisor</strong> in Odoo for the full report.</p>')
+    values = {
+        'company_name': company.name,
+        'today': date.today(),
+        'n_critical': n_critical,
+        'n_urgent': n_urgent,
+        'n_dead': n_dead,
+        'currency': currency,
+        'total_value': f'{total_value:,.2f}',
+        'critical_items': critical_items,
+    }
+    body_html = self.env['ir.qweb'].sudo()._render(
+        'smart_reorder_advisor.reorder_report_email_template', values
+    )
 
     subject = (
         f'{config.email_subject_prefix} {company.name} — '
@@ -78,7 +59,7 @@ def send_notifications(self, company, config, critical_count, warehouse_id=None)
         self.env['mail.thread'].sudo().message_notify(
             partner_ids=[user.partner_id.id],
             subject=subject,
-            body=''.join(body_lines),
+            body=body_html,
             subtype_xmlid='mail.mt_comment',
         )
 
@@ -86,7 +67,8 @@ def send_notifications(self, company, config, critical_count, warehouse_id=None)
 def send_email_report(self, company, config):
     """Returns True on success, False if PDF generation/send failed (a real
     error - surfaced by the caller as a 'completed_with_errors' run status),
-    or None when there was simply nothing to send (not an error)."""
+    or None when there was simply nothing to send (not an error, or held back
+    by the Critical/Urgent-only gate — Task 4)."""
     if not config.notify_user_ids:
         return None
     suggestions = self.sudo().search([
@@ -96,12 +78,24 @@ def send_email_report(self, company, config):
     if not suggestions:
         return None
 
+    # Task 4: reuse the existing "Notify Only for Critical / Urgent Items"
+    # toggle (already labeled for exactly this) so the boss isn't emailed a
+    # near-empty report most weeks — checked fresh here (not the loop's
+    # running total_critical) so it reflects snoozed/marked-ordered items
+    # correctly at the moment of sending.
+    if config.critical_notify_only:
+        urgent_or_critical_count = suggestions.filtered(
+            lambda s: s.urgency in ('critical', 'urgent')
+        )
+        if not urgent_or_critical_count:
+            return None
+
     try:
         # Odoo 16+ signature is _render_qweb_pdf(report_ref, res_ids, data):
         # the report reference goes FIRST. Passing the ids as report_ref
         # (the old 15.0 calling convention) makes every render fail.
         pdf_content, _dummy = self.env['ir.actions.report'].sudo()._render_qweb_pdf(
-            'smart_reorder_advisor.action_report_reorder_summary', suggestions.ids
+            'smart_reorder_advisor.action_report_boss_weekly_order', suggestions.ids
         )
     except Exception as e:
         _logger.warning('SmartReorder: PDF generation failed — %s', e)
@@ -109,7 +103,7 @@ def send_email_report(self, company, config):
 
     try:
         att = self.env['ir.attachment'].sudo().create({
-            'name':     f'Reorder_Report_{company.name}_{date.today()}.pdf',
+            'name':     f'Weekly_Order_List_{company.name}_{date.today()}.pdf',
             'type':     'binary',
             'datas':    base64.b64encode(pdf_content),
             'mimetype': 'application/pdf',
@@ -119,8 +113,8 @@ def send_email_report(self, company, config):
             'res_id':    config.id,
         })
         self.env['mail.mail'].sudo().create({
-            'subject':         f'{config.email_subject_prefix} Weekly Reorder — {company.name} — {date.today()}',
-            'body_html':       f'<p>Weekly Smart Reorder Report for <strong>{html_escape(company.name)}</strong> attached.</p>',
+            'subject':         f'{config.email_subject_prefix} Weekly Order List — {company.name} — {date.today()}',
+            'body_html':       f'<p>Weekly Order List for <strong>{html_escape(company.name)}</strong> attached.</p>',
             'recipient_ids':   [(6, 0, config.notify_user_ids.mapped('partner_id').ids)],
             'attachment_ids':  [(6, 0, [att.id])],
         }).send()

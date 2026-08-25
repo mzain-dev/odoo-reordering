@@ -133,6 +133,8 @@
                             <field name="allow_draft_po"/>
                             <field name="default_vendor_id"
                                    invisible="not allow_draft_po"/>
+                            <field name="stale_draft_po_days"
+                                   invisible="not allow_draft_po"/>
                             <field name="auto_flag_on_negative"/>
                             <field name="picking_hook_error_count" readonly="1" decoration-danger="picking_hook_error_count &gt; 0"/>
                         </group>
@@ -149,6 +151,15 @@
                     <group string="🔎 Needs-Review Auto-Triage">
                         <field name="needs_review_delta_threshold"/>
                         <field name="overstock_ceiling_months"/>
+                    </group>
+
+                    <group string="📋 Boss's Weekly Order Report">
+                        <field name="temp_vendor_ids" widget="many2many_tags"/>
+                        <div class="text-muted" colspan="2" style="padding:4px 0 8px 0; font-size:12px;">
+                            Suggestions still assigned to one of these vendors (or with no
+                            vendor at all) are excluded from the boss's weekly order report
+                            and listed separately under "Needs Attention" instead.
+                        </div>
                     </group>
                 </sheet>
             </form>

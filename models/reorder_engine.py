@@ -6,6 +6,10 @@ import statistics
 
 _logger = logging.getLogger(__name__)
 
+# Task 2: fixed threshold — vendor pricelist price vs. what was actually paid
+# on the last confirmed PO. Not a config field by design decision.
+PRICE_DISCREPANCY_THRESHOLD_PCT = 15.0
+
 
 def calc_months_of_stock(qty_available, avg_monthly_demand):
     """
@@ -23,16 +27,20 @@ def calc_months_of_stock(qty_available, avg_monthly_demand):
 
 
 def round_to_moq(qty, moq):
-    """Round qty UP to nearest MOQ multiple. Never returns negative."""
-    if moq <= 0 or qty <= 0:
-        return max(0.0, qty)
-    return math.ceil(qty / moq) * moq
+    """Raise qty to at least the vendor minimum. Never returns negative."""
+    if qty <= 0:
+        return 0.0
+    if moq <= 0:
+        return qty
+    return max(qty, moq)
 
 
 def classify_abc(avg_monthly_demand, config):
-    if avg_monthly_demand >= config.abc_a_threshold:
+    abc_a = config.get('abc_a_threshold') if isinstance(config, dict) else config.abc_a_threshold
+    abc_b = config.get('abc_b_threshold') if isinstance(config, dict) else config.abc_b_threshold
+    if avg_monthly_demand >= abc_a:
         return 'A'
-    if avg_monthly_demand >= config.abc_b_threshold:
+    if avg_monthly_demand >= abc_b:
         return 'B'
     return 'C'
 
@@ -255,7 +263,8 @@ def calculate_product_suggestion(
     tmpl_suppliers, primary_vendor_info, actual_avg_days,
     overdue_lines, predecessors, predecessor_names,
     global_stocks, global_sales, lane_lead_times,
-    partner_names_map, currency_convert_fn, reorder_behavior='system'
+    partner_names_map, currency_convert_fn, reorder_behavior='system', previously_triggered=False,
+    last_purchase_cost=0.0, last_purchase_date=None, last_purchase_vendor_id=False,
 ):
     if reorder_behavior == 'bulk_regular':
         avg_monthly = sum(monthly_series) / len(monthly_series) if monthly_series else 0.0
@@ -332,11 +341,15 @@ def calculate_product_suggestion(
         is_dead = (qty_on_hand > 0 and config_data['flag_dead_stock'])
 
     # Core formula (Min/Max Reorder Policy)
-    min_level = avg_monthly * (lead_months + config_data['safety_buffer_months'])
-    max_level = min_level + avg_monthly * config_data['order_cycle_months']
-    is_triggered = (qty_available < min_level) or (qty_on_hand < 0)
-    raw_qty = max(0.0, max_level - qty_available) if is_triggered else 0.0
-    suggested_qty = round_to_moq(raw_qty, moq)
+    levels = calculate_replenishment_levels(
+        avg_monthly, lead_months, config_data['safety_buffer_months'],
+        config_data['order_cycle_months'], qty_available, qty_on_hand, moq,
+        previously_triggered=previously_triggered
+    )
+    min_level = levels['min_stock_level']
+    max_level = levels['max_stock_level']
+    raw_qty = levels['raw_reorder_qty']
+    suggested_qty = levels['suggested_reorder_qty']
 
     # Price break selection (Feature 13)
     if tmpl_id and tmpl_suppliers and v_partner_id:
@@ -366,19 +379,45 @@ def calculate_product_suggestion(
                             if diff > 5:
                                 lead_months = actual_avg_days_val / 30.0
                     
-                    min_level = avg_monthly * (lead_months + config_data['safety_buffer_months'])
-                    max_level = min_level + avg_monthly * config_data['order_cycle_months']
-                    is_triggered = (qty_available < min_level) or (qty_on_hand < 0)
-                    raw_qty = max(0.0, max_level - qty_available) if is_triggered else 0.0
-                    suggested_qty = round_to_moq(raw_qty, moq)
+                    levels = calculate_replenishment_levels(
+                        avg_monthly, lead_months, config_data['safety_buffer_months'],
+                        config_data['order_cycle_months'], qty_available, qty_on_hand, moq,
+                        previously_triggered=previously_triggered
+                    )
+                    min_level = levels['min_stock_level']
+                    max_level = levels['max_stock_level']
+                    raw_qty = levels['raw_reorder_qty']
+                    suggested_qty = levels['suggested_reorder_qty']
 
     # Currency conversion
     price_company_currency = currency_convert_fn(v_price, v_currency_id)
 
+    # Effective unit cost (Task 1): what was actually paid beats a pricelist
+    # quote, which beats the AVCO running-average standard cost.
+    last_purchase_cost_val = last_purchase_cost or 0.0
+    if last_purchase_cost_val > 0.0:
+        effective_unit_cost = last_purchase_cost_val
+    elif price_company_currency > 0.0:
+        effective_unit_cost = price_company_currency
+    else:
+        effective_unit_cost = cost
+
+    # Price discrepancy flag (Task 2): only meaningful when BOTH a pricelist
+    # price and an actual last-purchase cost are on record — comparing either
+    # against a missing value would be a false signal, not a real mismatch.
+    has_price_discrepancy = False
+    price_discrepancy_pct = 0.0
+    if last_purchase_cost_val > 0.0 and price_company_currency > 0.0:
+        price_discrepancy_pct = (
+            (price_company_currency - last_purchase_cost_val) / last_purchase_cost_val
+        ) * 100.0
+        has_price_discrepancy = abs(price_discrepancy_pct) > PRICE_DISCREPANCY_THRESHOLD_PCT
+
     # Fastest Alternative Vendor Selection (Feature 13)
     alt_vendor_id_val = False
     alt_vendor_lead_days_val = 0
-    if tmpl_id and tmpl_suppliers:
+    margin = config_data.get('alt_vendor_lead_margin_days', 0.0)
+    if margin > 0 and tmpl_id and tmpl_suppliers:
         other_partners = set(
             r['partner_id'][0]
             for r in tmpl_suppliers
@@ -403,7 +442,6 @@ def calculate_product_suggestion(
                     fastest_alt_lead_days = alt_delay
                     fastest_alt_vendor_id = alt_pid
         
-        margin = config_data['alt_vendor_lead_margin_days']
         if fastest_alt_vendor_id and (stated_lead_days - fastest_alt_lead_days) >= margin:
             alt_vendor_id_val = fastest_alt_vendor_id
             alt_vendor_lead_days_val = fastest_alt_lead_days
@@ -414,10 +452,6 @@ def calculate_product_suggestion(
         suggested_qty = 0.0
 
     reorder_needed = suggested_qty > 0 or qty_on_hand < 0
-
-    class DictWrapper(object):
-        def __init__(self, d):
-            self.__dict__ = d
 
     if is_superseded:
         suggested_qty = 0.0
@@ -435,7 +469,7 @@ def calculate_product_suggestion(
             is_dead = True
             urgency = 'dead'
     else:
-        abc_class = classify_abc(avg_monthly, DictWrapper(config_data))
+        abc_class = classify_abc(avg_monthly, config_data)
         urgency = determine_urgency(
             qty_on_hand, months_of_stock, avg_monthly,
             lead_months, is_dead, suggested_qty
@@ -561,7 +595,7 @@ def calculate_product_suggestion(
         f'Stated MOQ: {moq:.0f} units',
         f'Formula: Min stock = Avg demand × (Lead time + Safety buffer) = {min_level:.2f} units',
         f'Formula: Max stock = Min stock + (Avg demand × Order cycle) = {max_level:.2f} units',
-        f'Formula: Reorder qty = Max stock - Net available = {raw_qty:.2f} units (rounded up to MOQ = {suggested_qty:.2f})',
+        f'Formula: Reorder qty = Max stock - Net available = {raw_qty:.2f} units (raised to vendor minimum = {suggested_qty:.2f})',
         f'Seasonal comparison: last year same period sold {ly_qty_val:.2f} units. {seasonal_note or ""}'
     ]
 
@@ -662,6 +696,12 @@ def calculate_product_suggestion(
         'vendor_stated_lead_days':  stated_lead_days,
         'vendor_actual_avg_days':   actual_avg_days_val,
         'vendor_performance_note':  vendor_perf_note,
+        'last_purchase_cost':       last_purchase_cost_val,
+        'last_purchase_date':       last_purchase_date,
+        'last_purchase_vendor_id':  last_purchase_vendor_id,
+        'effective_unit_cost':      effective_unit_cost,
+        'has_price_discrepancy':    has_price_discrepancy,
+        'price_discrepancy_pct':    price_discrepancy_pct,
         'alt_vendor_id':            alt_vendor_id_val,
         'alt_vendor_lead_days':     alt_vendor_lead_days_val,
         'transfer_source_warehouse_id': transfer_source_wh_id,
@@ -672,3 +712,19 @@ def calculate_product_suggestion(
         'has_bulk_concentration':   has_bulk_concentration,
     }
     return vals
+
+
+def calculate_replenishment_levels(avg_monthly, lead_months, safety_buffer_months, order_cycle_months, qty_available, qty_on_hand, moq, previously_triggered=False):
+    min_level = avg_monthly * (lead_months + safety_buffer_months)
+    max_level = min_level + avg_monthly * order_cycle_months
+    is_triggered = (qty_available < min_level) or (qty_on_hand < 0) or (previously_triggered and qty_available < max_level)
+    raw_qty = max(0.0, max_level - qty_available) if is_triggered else 0.0
+    suggested_qty = int(math.ceil(round_to_moq(raw_qty, moq)))
+    reorder_needed = suggested_qty > 0 or qty_on_hand < 0
+    return {
+        'min_stock_level': min_level,
+        'max_stock_level': max_level,
+        'raw_reorder_qty': raw_qty,
+        'suggested_reorder_qty': suggested_qty,
+        'reorder_needed': reorder_needed,
+    }

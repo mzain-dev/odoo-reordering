@@ -9,6 +9,14 @@
                     Are you sure you want to generate consolidated Draft Purchase Orders for the selected suggestions?
                     The suggestions will be grouped by Vendor and Company.
                 </p>
+                <div class="alert alert-warning" role="alert"
+                     invisible="not fallback_vendor_count">
+                    ⚠️ <strong><field name="fallback_vendor_count" readonly="1" nolabel="1" class="oe_inline"/> item(s)</strong>
+                    have no vendor of their own and will be ordered from the configured
+                    Default Vendor instead:
+                    <field name="fallback_vendor_names" readonly="1" nolabel="1" class="oe_inline fw-bold"/>.
+                    Double-check this is correct before continuing.
+                </div>
                 <footer>
                     <button name="action_confirm_consolidation" string="Generate POs" type="object" class="btn-primary"/>
                     <button string="Cancel" class="btn-secondary" special="cancel"/>

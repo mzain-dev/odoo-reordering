@@ -22,22 +22,22 @@
               action="action_smart_reorder_suggestions"
               sequence="1"/>
     <menuitem id="menu_smart_reorder_critical"
-              name="🔴 Critical — Negative Stock"
+              name="Critical - Negative Stock"
               parent="menu_smart_reorder_suggestions"
               action="action_smart_reorder_critical"
               sequence="2"/>
     <menuitem id="menu_smart_reorder_dead_stock"
-              name="💀 Dead Stock"
+              name="Dead Stock"
               parent="menu_smart_reorder_suggestions"
               action="action_smart_reorder_dead_stock"
               sequence="3"/>
     <menuitem id="menu_smart_reorder_needs_review"
-              name="🔎 Needs Review"
+              name="Needs Review"
               parent="menu_smart_reorder_suggestions"
               action="action_smart_reorder_needs_review"
               sequence="4"/>
     <menuitem id="menu_smart_reorder_budget"
-              name="💰 Within Budget"
+              name="Within Budget"
               parent="menu_smart_reorder_suggestions"
               action="action_smart_reorder_budget"
               sequence="5"/>
@@ -49,30 +49,29 @@
 
     <!-- Generate wizard -->
     <menuitem id="menu_smart_reorder_generate"
-              name="⚙️ Generate Analysis"
+              name="Generate Analysis"
               parent="menu_smart_reorder_root"
               action="action_generate_suggestions_wizard"
               sequence="3"
               groups="smart_reorder_advisor.group_smart_reorder_manager"/>
 
-    <!-- Run History (T-22): visible to Users (read-only) and Managers, matching
-         the ir.model.access.csv grants on smart.reorder.cron.log. -->
+    <!-- Run History (T-22) -->
     <menuitem id="menu_smart_reorder_cron_log"
-              name="🕓 Run History"
+              name="Run History"
               parent="menu_smart_reorder_root"
               action="action_smart_reorder_cron_log"
               sequence="9"/>
 
     <!-- Forecast Back-testing -->
     <menuitem id="menu_smart_reorder_forecast_snapshot"
-              name="📊 Forecast Back-testing"
+              name="Forecast Back-testing"
               parent="menu_smart_reorder_root"
               action="action_smart_reorder_forecast_snapshot"
               sequence="8"/>
 
     <!-- Observability Dashboard -->
     <menuitem id="menu_smart_reorder_observability_dashboard"
-              name="📈 Observability Dashboard"
+              name="Observability Dashboard"
               parent="menu_smart_reorder_root"
               action="action_smart_reorder_observability_dashboard"
               sequence="10"
@@ -91,7 +90,7 @@
               sequence="1"
               groups="smart_reorder_advisor.group_smart_reorder_manager"/>
     <menuitem id="menu_smart_reorder_transfer_lane"
-              name="🚚 Transfer Lanes"
+              name="Transfer Lanes"
               parent="menu_smart_reorder_config"
               action="action_smart_reorder_transfer_lane"
               sequence="2"

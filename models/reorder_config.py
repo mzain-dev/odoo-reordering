@@ -1,5 +1,6 @@
 from odoo import models, fields, api, _
 from odoo.exceptions import ValidationError
+from odoo.tools import float_compare
 from ..utils.access import require_group
 
 _MANAGER_GROUP = 'smart_reorder_advisor.group_smart_reorder_manager'
@@ -93,9 +94,10 @@ class SmartReorderConfig(models.Model):
     # ── PHASE 2: Email Delivery ────────────────────────────────────────────────
     send_email_report = fields.Boolean(
         string='Email PDF Report After Analysis',
-        default=False,
-        help='After each cron run, automatically email the summary PDF report '
-             'to the notify users.'
+        default=True,
+        help='After each cron run, automatically email the Weekly Order List '
+             "PDF to the notify users (subject to 'Notify Only for Critical / "
+             "Urgent Items' below — Task 4)."
     )
     email_subject_prefix = fields.Char(
         string='Email Subject Prefix',
@@ -120,6 +122,23 @@ class SmartReorderConfig(models.Model):
         'res.partner',
         string='Default Vendor (for Draft POs)',
         help='Used when no vendor is set on the product.'
+    )
+    stale_draft_po_days = fields.Integer(
+        string='Stale Draft PO Alert Threshold (Days)',
+        default=7,
+        help='Flag a suggestion when a Draft PO it created has sat unconfirmed '
+             'for longer than this many days. Set to 0 to disable.'
+    )
+
+    # ── Boss's Weekly Order Report (Task 3) ────────────────────────────────────
+    temp_vendor_ids = fields.Many2many(
+        'res.partner', 'smart_reorder_config_temp_vendor_rel', 'config_id', 'partner_id',
+        string='Temporary/Placeholder Vendors',
+        help='Vendors used as a formal placeholder meaning "no real vendor assigned '
+             'yet" (e.g. a "Temporary Supplier" record) — not real suppliers. '
+             "Suggestions still tagged with one of these are excluded from the boss's "
+             'weekly order report and routed to its "Needs Attention" section instead, '
+             'the same as a suggestion with no vendor at all.'
     )
 
     # ── PHASE 3: Auto-Flag on Delivery ────────────────────────────────────────
@@ -235,12 +254,10 @@ class SmartReorderConfig(models.Model):
         ('biweekly', 'Bi-Weekly (Every 2 Weeks)'),
         ('monthly',  'Monthly'),
     ], string='Analysis Frequency', default='weekly', required=True,
-       help='How often the scheduled cron job re-runs the full reorder analysis. '
-            'Saving this writes directly to the "Smart Reorder: Weekly Analysis" '
-            'scheduled action — no need to open Settings → Technical → Scheduled '
-            'Actions. That cron processes every company in a single run, so this '
-            'setting is effectively system-wide: whichever company\'s config was '
-            'saved most recently wins.')
+       help='System-wide setting, shared by all companies. '
+            'How often the scheduled cron job re-runs the full reorder analysis. '
+            'Saving this updates the frequency for all company configurations '
+            'and synchronizes the "Smart Reorder: Weekly Analysis" scheduled action.')
 
     active = fields.Boolean(default=True)
 
@@ -293,11 +310,42 @@ class SmartReorderConfig(models.Model):
             else:
                 rec.order_cycle_months = self._CYCLE_DEFAULTS.get(rec.cron_frequency, 1.0)
 
+    @api.onchange('cron_frequency')
+    def _onchange_cron_frequency_warn_shared(self):
+        """Task 8 / Finding 8: cron_frequency LOOKS per-company (it lives on
+        this per-company config record) but is actually system-wide — saving
+        it here overwrites every other company's config and the one shared
+        scheduled action. The static help text already explained this but was
+        easy to skim past; a real onchange warning forces an acknowledgment
+        at the moment the value is actually changed, without hard-blocking
+        the (legitimate) global change."""
+        if not self.cron_frequency:
+            return
+        origin_id = self._origin.id if self._origin else False
+        other_configs = self.env['smart.reorder.config'].search([
+            ('id', '!=', origin_id),
+            ('cron_frequency', '!=', self.cron_frequency),
+        ])
+        if other_configs:
+            company_names = ', '.join(other_configs.mapped('company_id.name'))
+            return {
+                'warning': {
+                    'title': _('Analysis Frequency is shared across ALL companies'),
+                    'message': _(
+                        'This is not a per-company setting even though it lives on '
+                        'this company\'s configuration. Saving it will also change it '
+                        'for: %s — and the single shared "Smart Reorder: Weekly '
+                        'Analysis" scheduled action, since it only supports one '
+                        'interval for every company.'
+                    ) % company_names,
+                }
+            }
+
     _sql_constraints = [
         ('company_unique', 'UNIQUE(company_id)', 'Only one configuration allowed per company.'),
     ]
 
-    @api.constrains('safety_buffer_months', 'default_lead_time_months', 'order_cycle_months', 'overstock_ceiling_months', 'alt_vendor_lead_margin_days', 'snapshot_retention_months', 'transfer_surplus_threshold', 'default_internal_transfer_days')
+    @api.constrains('safety_buffer_months', 'default_lead_time_months', 'order_cycle_months', 'overstock_ceiling_months', 'alt_vendor_lead_margin_days', 'snapshot_retention_months', 'transfer_surplus_threshold', 'default_internal_transfer_days', 'stale_draft_po_days')
     def _check_positive_months(self):
         for rec in self:
             if rec.safety_buffer_months < 0:
@@ -316,6 +364,8 @@ class SmartReorderConfig(models.Model):
                 raise ValidationError(_('Transfer surplus threshold cannot be negative.'))
             if rec.default_internal_transfer_days < 0:
                 raise ValidationError(_('Default internal transfer lead time (Days) cannot be negative.'))
+            if rec.stale_draft_po_days < 0:
+                raise ValidationError(_('Stale Draft PO Alert Threshold cannot be negative.'))
 
     @api.constrains('needs_review_delta_threshold')
     def _check_needs_review_delta_threshold(self):
@@ -347,12 +397,26 @@ class SmartReorderConfig(models.Model):
             # An explicit order-cycle value at creation is a manual choice —
             # unless it simply equals the derived default (the web client can
             # echo the computed value back on save).
-            cycle = vals.get('order_cycle_months')
-            if cycle and 'order_cycle_is_manual' not in vals:
+            if 'order_cycle_months' in vals and 'order_cycle_is_manual' not in vals:
+                cycle = vals['order_cycle_months']
                 freq = vals.get('cron_frequency', 'weekly')
-                if cycle != self._CYCLE_DEFAULTS.get(freq):
+                default_cycle = self._CYCLE_DEFAULTS.get(freq, 0.25)
+                if float_compare(cycle, default_cycle, precision_digits=4) != 0:
                     vals['order_cycle_is_manual'] = True
         records = super().create(vals_list)
+
+        freqs = [v.get('cron_frequency') for v in vals_list if v.get('cron_frequency')]
+        if freqs:
+            new_freq = freqs[0]
+            other_configs = self.sudo().search([
+                ('id', 'not in', records.ids),
+                ('cron_frequency', '!=', new_freq)
+            ])
+            if other_configs:
+                other_configs.write({'cron_frequency': new_freq})
+            if len(set(freqs)) > 1 or records.filtered(lambda r: r.cron_frequency != new_freq):
+                records.write({'cron_frequency': new_freq})
+
         records._sync_cron_frequency()
         return records
 
@@ -361,21 +425,29 @@ class SmartReorderConfig(models.Model):
         # value that equals the derived default returns the field to automatic
         # derivation. The flag comparison must happen per record because the
         # derived default depends on each record's (possibly changing) frequency.
-        if vals.get('order_cycle_months') and 'order_cycle_is_manual' not in vals:
+        if 'order_cycle_months' in vals and 'order_cycle_is_manual' not in vals:
             cycle = vals['order_cycle_months']
             res = True
             for rec in self:
                 freq = vals.get('cron_frequency', rec.cron_frequency)
+                default_cycle = self._CYCLE_DEFAULTS.get(freq, 0.25)
                 rec_vals = dict(vals, order_cycle_is_manual=(
-                    cycle != self._CYCLE_DEFAULTS.get(freq)
+                    float_compare(cycle, default_cycle, precision_digits=4) != 0
                 ))
                 res = super(SmartReorderConfig, rec).write(rec_vals) and res
-            if 'cron_frequency' in vals:
-                self._sync_cron_frequency()
-            return res
-        res = super().write(vals)
+        else:
+            res = super().write(vals)
+
         if 'cron_frequency' in vals:
+            new_freq = vals['cron_frequency']
+            other_configs = self.sudo().search([
+                ('id', 'not in', self.ids),
+                ('cron_frequency', '!=', new_freq)
+            ])
+            if other_configs:
+                other_configs.write({'cron_frequency': new_freq})
             self._sync_cron_frequency()
+
         return res
 
     def _sync_cron_frequency(self):

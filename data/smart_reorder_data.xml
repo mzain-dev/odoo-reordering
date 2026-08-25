@@ -29,12 +29,14 @@
             <field name="code">model.action_run_weekly_cron()</field>
             <field name="interval_number">1</field>
             <field name="interval_type">weeks</field>
-            <field name="numbercall">-1</field>
-            <field name="doall" eval="False"/>
-            <!-- Stays OFF on install. An admin must enable this manually from
-                 Settings → Technical → Scheduled Actions, and only after a staging
-                 dry-run plus a manual hand-check of a sample of products. -->
-            <field name="active">False</field>
+            <!-- Task 4: enabled by default — automated weekly delivery is
+                 explicitly requested. Confirm the analysis window / lead time
+                 / safety buffer defaults (Task 6) before this first runs for
+                 real. noupdate="1" above means this change only reaches an
+                 ALREADY-installed database via the migration script
+                 (migrations/17.0.5.3.0/post-migrate.py), not automatically on
+                 module update. -->
+            <field name="active">True</field>
             <field name="user_id" ref="base.user_root"/>
         </record>
 
@@ -45,8 +47,6 @@
             <field name="code">model._score_snapshots()</field>
             <field name="interval_number">1</field>
             <field name="interval_type">weeks</field>
-            <field name="numbercall">-1</field>
-            <field name="doall" eval="False"/>
             <!-- Enable manually after the analysis cron has been running long
                  enough to have snapshots older than one lead time to score. -->
             <field name="active">False</field>

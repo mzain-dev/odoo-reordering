@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="view_smart_reorder_snooze_wizard_form" model="ir.ui.view">
+        <field name="name">smart.reorder.snooze.wizard.form</field>
+        <field name="model">smart.reorder.snooze.wizard</field>
+        <field name="arch" type="xml">
+            <form string="Snooze Suggestions">
+                <sheet>
+                    <group>
+                        <field name="snooze_until"/>
+                        <field name="snooze_note" placeholder="e.g. Supplier stock issue, waiting on quote..."/>
+                    </group>
+                    <footer>
+                        <button string="Confirm" name="action_confirm" type="object" class="btn-primary"/>
+                        <button string="Cancel" class="btn-secondary" special="cancel"/>
+                    </footer>
+                </sheet>
+            </form>
+        </field>
+    </record>
+
+    <record id="action_smart_reorder_snooze_wizard" model="ir.actions.act_window">
+        <field name="name">Snooze Suggestions</field>
+        <field name="res_model">smart.reorder.snooze.wizard</field>
+        <field name="view_mode">form</field>
+        <field name="target">new</field>
+    </record>
+</odoo>

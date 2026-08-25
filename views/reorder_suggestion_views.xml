@@ -18,10 +18,22 @@
                             string="📊 Export to Excel"
                             type="action"
                             class="btn-secondary"/>
+                    <button name="action_snooze"
+                            string="💤 Bulk Snooze"
+                            type="object"
+                            class="btn-secondary"/>
+                    <button name="action_bulk_mark_ordered"
+                            string="✅ Mark Selected as Ordered"
+                            type="object"
+                            class="btn-secondary"/>
                 </header>
 
-                <field name="budget_rank"      string="#" optional="show"/>
-                <field name="is_stale"         string="🕓 Stale?" optional="show"/>
+                <!-- Task 8: default column set trimmed to an inventory manager's
+                     day-to-day working list — everything below is still
+                     available via the column-picker (⚙) gear icon, this only
+                     changes what a fresh user sees without configuring anything. -->
+                <field name="budget_rank"      string="#" optional="hide"/>
+                <field name="is_stale"         string="🕓 Stale?" optional="hide"/>
                 <field name="needs_review"     string="🔎 Review?" optional="show"/>
                 <field name="urgency"          widget="badge"
                        decoration-danger="urgency == 'critical'"
@@ -37,18 +49,18 @@
                        decoration-success="demand_trend == 'up'"
                        decoration-danger="demand_trend == 'down'"
                        decoration-muted="demand_trend in ('stable','new')"
-                       optional="show"/>
+                       optional="hide"/>
                 <field name="sales_pattern"    widget="badge"
                        decoration-success="sales_pattern == 'regular'"
                        decoration-info="sales_pattern == 'sometimes'"
                        decoration-warning="sales_pattern == 'big_order_mixed'"
                        decoration-danger="sales_pattern == 'one_time_big_order'"
                        decoration-muted="sales_pattern == 'new'"
-                       optional="show"/>
+                       optional="hide"/>
 
                 <field name="company_id"       groups="base.group_multi_company" optional="show"/>
                 <field name="warehouse_id"     optional="show"/>
-                <field name="analysis_date"    string="Analysis Date" optional="show"/>
+                <field name="analysis_date"    string="Analysis Date" optional="hide"/>
                 <field name="default_code"     string="Part No."/>
                 <field name="product_id"/>
                 <field name="superseded_by_id" optional="hide"/>
@@ -56,21 +68,21 @@
 
                 <field name="qty_on_hand"      string="On Hand"
                        decoration-danger="qty_on_hand &lt; 0"/>
-                <field name="qty_incoming"     string="PO Incoming" optional="show"/>
-                <field name="qty_outgoing"     string="Outgoing" optional="show"/>
+                <field name="qty_incoming"     string="PO Incoming" optional="hide"/>
+                <field name="qty_outgoing"     string="Outgoing" optional="hide"/>
                 <field name="qty_available"    string="Net Avail."/>
                 <field name="months_of_stock"  string="Months Left" digits="[16,1]"
                        decoration-danger="months_of_stock &lt; 1"
                        decoration-warning="months_of_stock &lt; 2"/>
-                <field name="months_of_stock_after_order" string="Months Left After Order" digits="[16,1]" optional="show"
+                <field name="months_of_stock_after_order" string="Months Left After Order" digits="[16,1]" optional="hide"
                        decoration-danger="is_overstocked == True"/>
                 <field name="is_overstocked" column_invisible="True"/>
 
                 <field name="avg_monthly_demand" string="Avg/Month" digits="[16,2]"/>
-                <field name="lead_time_months"   string="Lead (Mo)" digits="[16,1]" optional="show"/>
-                <field name="moq"                string="MOQ" optional="show"/>
-                <field name="min_stock_level"    string="Min Level" optional="show"/>
-                <field name="max_stock_level"    string="Max Level" optional="show"/>
+                <field name="lead_time_months"   string="Lead (Mo)" digits="[16,1]" optional="hide"/>
+                <field name="moq"                string="MOQ" optional="hide"/>
+                <field name="min_stock_level"    string="Min Level" optional="hide"/>
+                <field name="max_stock_level"    string="Max Level" optional="hide"/>
 
                 <field name="raw_reorder_qty"        string="Raw Qty" optional="hide"/>
                 <field name="suggested_reorder_qty"  string="Suggest Reorder"
@@ -81,32 +93,35 @@
                        decoration-info="delta_pct &lt; 0"/>
                 <field name="confidence"             string="Confidence" optional="hide" widget="progressbar"/>
 
-                <field name="product_cost"     string="Unit Cost" optional="show"/>
+                <field name="product_cost"     string="Unit Cost" optional="hide"/>
                 <field name="reorder_value"    string="Reorder Value"
                        widget="monetary" options="{'currency_field': 'currency_id'}"
                        decoration-bf="reorder_needed == True"/>
 
                 <field name="is_dead_stock"         string="Dead?" optional="show"/>
-                <field name="months_since_last_sale" string="Mo. No Sale" optional="show"/>
+                <field name="months_since_last_sale" string="Mo. No Sale" optional="hide"/>
 
-                <field name="within_budget"    string="In Budget?" optional="show"/>
-                <field name="is_provisional"   string="Provisional" optional="show" widget="boolean"/>
+                <field name="within_budget"    string="In Budget?" optional="hide"/>
+                <field name="is_provisional"   string="Provisional" optional="hide" widget="boolean"/>
 
-                <field name="vendor_id"        string="Vendor" optional="hide"/>
+                <field name="vendor_id"        string="Vendor" optional="show"/>
 
-                <field name="transfer_source_warehouse_id" string="Transfer Source" optional="show"/>
-                <field name="transfer_suggested_qty" string="Transfer Qty" optional="show"/>
+                <field name="transfer_source_warehouse_id" string="Transfer Source" optional="hide"/>
+                <field name="transfer_suggested_qty" string="Transfer Qty" optional="hide"/>
                 <field name="transfer_lead_time_days" string="Transfer Lead (Days)" optional="hide"/>
 
                 <field name="draft_po_ref" string="Draft PO" optional="show"
-                       decoration-warning="draft_po_ref"/>
+                       decoration-warning="draft_po_ref and not is_draft_po_stale"
+                       decoration-danger="is_draft_po_stale"/>
+                <field name="draft_po_stale_days" string="Draft PO Age (Days)" optional="hide"/>
+                <field name="is_draft_po_stale" column_invisible="True"/>
 
                 <field name="stale_reason"     string="Stale Reason" optional="hide"/>
                 <field name="needs_review_reason" string="Review Reason" optional="hide"/>
 
-                <field name="reorder_needed"   invisible="1"/>
-                <field name="urgency_rank"     invisible="1"/>
-                <field name="currency_id"      invisible="1"/>
+                <field name="reorder_needed"   column_invisible="True"/>
+                <field name="urgency_rank"     column_invisible="True"/>
+                <field name="currency_id"      column_invisible="True"/>
             </tree>
         </field>
     </record>
@@ -127,11 +142,26 @@
                             type="object"
                             class="btn-secondary"
                             invisible="is_snoozed or not reorder_needed"/>
+                    <button name="action_snooze"
+                            string="💤 Snooze Custom..."
+                            type="object"
+                            class="btn-secondary"
+                            invisible="is_snoozed or not reorder_needed"/>
                     <button name="action_unsnooze"
                             string="⏰ Unsnooze"
                             type="object"
                             class="btn-warning"
                             invisible="not is_snoozed"/>
+                    <button name="action_mark_ordered"
+                            string="✅ Mark as Ordered"
+                            type="object"
+                            class="btn-secondary"
+                            invisible="is_marked_ordered or not reorder_needed"/>
+                    <button name="action_unmark_ordered"
+                            string="↩️ Undo Mark as Ordered"
+                            type="object"
+                            class="btn-warning"
+                            invisible="not is_marked_ordered"/>
                     <button name="action_create_draft_po"
                             string="📋 Create Draft PO"
                             type="object"
@@ -173,6 +203,8 @@
                     <field name="is_stale" invisible="1"/>
                     <field name="needs_review" invisible="1"/>
                     <field name="is_provisional" invisible="1"/>
+                    <field name="is_marked_ordered" invisible="1"/>
+                    <field name="is_draft_po_stale" invisible="1"/>
                     <div class="oe_title">
                         <div class="o_row" style="gap:8px; flex-wrap:wrap;">
                             <field name="urgency" widget="badge"
@@ -230,6 +262,21 @@
                          ⚡ <strong>PROVISIONAL SUGGESTION.</strong> Stock went negative. Computed using emergency fallback. Run full analysis to replace with actual forecast.
                      </div>
 
+                    <div class="alert alert-success" role="alert"
+                         invisible="not is_marked_ordered">
+                        ✅ <strong>MARKED AS ORDERED</strong> by
+                        <field name="marked_ordered_by_id" readonly="1" nolabel="1" class="oe_inline"/>
+                        on <field name="marked_ordered_at" readonly="1" nolabel="1" class="oe_inline"/>.
+                        Held off the next report; will resurface automatically if still needed after that.
+                        <div invisible="not marked_ordered_confirmer_name">
+                            Confirmed by: <field name="marked_ordered_confirmer_name" readonly="1" nolabel="1" class="oe_inline"/>
+                        </div>
+                        <div class="text-muted" style="font-size:11px;">
+                            To record who actually confirmed the order (if different from who clicked
+                            the button), add a note below in the log.
+                        </div>
+                    </div>
+
                     <div class="alert alert-danger" role="alert"
                          invisible="qty_on_hand >= 0">
                         ⚠️ <strong>NEGATIVE STOCK!</strong>
@@ -252,11 +299,20 @@
                     </div>
 
                     <div class="alert alert-warning" role="alert"
-                         invisible="not draft_po_ref">
+                         invisible="not draft_po_ref or is_draft_po_stale">
                         📋 <strong>DRAFT PO PENDING:</strong>
                         <field name="draft_po_ref" readonly="1" nolabel="1" class="oe_inline"/>.
                         Reorder suggestions are held until it is confirmed or cancelled —
                         see the Calculation Breakdown below for details.
+                    </div>
+
+                    <div class="alert alert-danger" role="alert"
+                         invisible="not is_draft_po_stale">
+                        ⏳ <strong>STALE DRAFT PO:</strong>
+                        <field name="draft_po_ref" readonly="1" nolabel="1" class="oe_inline"/>
+                        has sat unconfirmed for
+                        <field name="draft_po_stale_days" readonly="1" nolabel="1" class="oe_inline"/>
+                        days. Confirm or cancel it — until then this suggestion stays held.
                     </div>
 
                     <div class="alert alert-success" role="alert"
@@ -281,7 +337,7 @@
                             <div style="margin:0; color:#666; font-size:12px; display: flex; justify-content: center; align-items: center; flex-wrap: wrap; gap: 4px;">
                                 <span>(Raw:</span>
                                 <field name="raw_reorder_qty" readonly="1" nolabel="1" class="d-inline-block fw-bold"/>
-                                <span>→ rounded up to MOQ of</span>
+                                <span>→ raised to vendor minimum of</span>
                                 <field name="moq" readonly="1" nolabel="1" class="d-inline-block fw-bold"/>
                                 <span>)</span>
                             </div>
@@ -394,6 +450,40 @@
                             </group>
                         </page>
 
+                        <page string="💰 Cost Detail">
+                            <div class="alert alert-warning" role="alert"
+                                 invisible="not has_price_discrepancy">
+                                ⚠️ <strong>PRICE DISCREPANCY.</strong>
+                                The vendor pricelist price differs from the last actual purchase
+                                cost by
+                                <field name="price_discrepancy_pct" readonly="1" nolabel="1" class="oe_inline fw-bold"/>%.
+                                Confirm which figure is current before ordering.
+                            </div>
+                            <group string="Cost Comparison">
+                                <group>
+                                    <field name="product_cost" string="Standard Cost (AVCO)" readonly="1"/>
+                                    <field name="vendor_price" string="Vendor Price (Pricelist)" readonly="1"/>
+                                    <field name="last_purchase_cost" readonly="1"/>
+                                    <field name="effective_unit_cost" readonly="1"/>
+                                </group>
+                                <group>
+                                    <field name="last_purchase_date" readonly="1"/>
+                                    <field name="last_purchase_vendor_id" readonly="1"/>
+                                </group>
+                            </group>
+                            <group string="Discrepancy Check"
+                                   invisible="not last_purchase_cost or not vendor_price">
+                                <field name="has_price_discrepancy" readonly="1"/>
+                                <field name="price_discrepancy_pct" readonly="1"/>
+                            </group>
+                            <div class="text-muted" style="padding:8px 0; font-size:12px;"
+                                 invisible="last_purchase_cost and vendor_price">
+                                A discrepancy check needs both a Vendor Price (pricelist) and a
+                                Last Purchase Cost (from a confirmed PO) to compare — one or both
+                                are not yet on record for this product.
+                            </div>
+                        </page>
+
                         <page string="🧮 Calculation">
                             <group string="Demand Forecast (Average + Spike Rejection)">
                                 <field name="excluded_outlier_months" readonly="1"/>
@@ -418,8 +508,8 @@
                             <group string="Snooze Settings">
                                 <group>
                                     <field name="is_snoozed" readonly="1"/>
-                                    <field name="snoozed_until"/>
-                                    <field name="snoozed_note"/>
+                                    <field name="snoozed_until" readonly="1"/>
+                                    <field name="snoozed_note" readonly="1"/>
                                 </group>
                             </group>
                             <div class="text-muted" style="padding:8px 0; font-size:12px;">
@@ -432,6 +522,7 @@
                 </sheet>
                 <div class="oe_chatter">
                     <field name="message_follower_ids"/>
+                    <field name="activity_ids"/>
                     <field name="message_ids"/>
                 </div>
             </form>
@@ -531,7 +622,7 @@
                 <field name="vendor_id" string="Vendor"/>
 
                 <filter name="reorder_needed"  string="🔁 Needs Reorder"
-                        domain="[('reorder_needed','=',True), ('po_ids', '=', False)]"/>
+                        domain="[('reorder_needed','=',True), ('po_ids', '=', False), ('is_snoozed', '=', False)]"/>
                 <filter name="critical"        string="🔴 Critical (Negative)"
                         domain="[('urgency','=','critical')]"/>
                 <filter name="urgent"          string="🟠 Urgent"
@@ -550,6 +641,8 @@
                         domain="['|', ('delta_pct','&gt;',50), ('delta_pct','&lt;',-50)]"/>
                 <filter name="needs_review"    string="🔎 Needs Review"
                         domain="[('needs_review','=',True)]"/>
+                <filter name="draft_po_stale"  string="⏳ Stale Draft PO"
+                        domain="[('is_draft_po_stale','=',True)]"/>
 
                 <separator/>
 
@@ -613,7 +706,7 @@
         <field name="res_model">smart.reorder.suggestion</field>
         <field name="view_mode">kanban,tree,form</field>
         <field name="search_view_id" ref="view_smart_reorder_suggestion_search"/>
-        <field name="context">{'search_default_reorder_needed': 1, 'search_default_gb_warehouse': 1}</field>
+        <field name="context">{'search_default_reorder_needed': 1}</field>
     </record>
 
     <record id="action_smart_reorder_all" model="ir.actions.act_window">
@@ -621,7 +714,6 @@
         <field name="res_model">smart.reorder.suggestion</field>
         <field name="view_mode">tree,form</field>
         <field name="search_view_id" ref="view_smart_reorder_suggestion_search"/>
-        <field name="context">{'search_default_gb_warehouse': 1}</field>
     </record>
 
     <record id="action_smart_reorder_critical" model="ir.actions.act_window">

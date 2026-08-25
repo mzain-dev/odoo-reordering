@@ -1,6 +1,6 @@
 {
     'name': 'Smart Reorder Advisor',
-    'version': '17.0.5.1.0',
+    'version': '17.0.5.4.0',
     'category': 'Inventory/Inventory',
     'summary': 'Monthly demand-based reorder suggestions — no Min/Max setup needed',
     'description': '''
@@ -73,6 +73,8 @@ CLASSIFICATION & BUDGET
         'views/forecast_snapshot_views.xml',
         'wizard/generate_suggestions_wizard_views.xml',
         'wizard/smart_reorder_po_wizard_views.xml',
+        'wizard/snooze_wizard_views.xml',
+        'views/reorder_report_email_template.xml',
         'views/menu_views.xml',
         'report/reorder_report_template.xml',
         'report/reorder_report_action.xml',

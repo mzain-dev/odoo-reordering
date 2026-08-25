@@ -99,7 +99,7 @@ class SmartReorderObservabilityDashboard(models.TransientModel):
 
     def _compute_stats(self):
         for rec in self:
-            limit_date = datetime.now() - timedelta(days=30)
+            limit_date = fields.Datetime.now() - timedelta(days=30)
             logs = self.env['smart.reorder.cron.log'].search([
                 ('company_id', '=', rec.company_id.id),
                 ('started_at', '>=', limit_date)

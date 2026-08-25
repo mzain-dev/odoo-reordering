@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <template id="reorder_report_email_template">
+        <div style="font-family: sans-serif; max-width: 600px; margin: auto;">
+            <h3>📦 Smart Reorder Advisor — <t t-out="company_name"/></h3>
+            <p>Analysis completed on <strong><t t-out="today"/></strong></p>
+            <table style="border-collapse:collapse;width:100%;">
+                <tr style="background:#f5f5f5;">
+                    <td style="padding:8px;"><strong>🔴 Critical</strong></td>
+                    <td style="padding:8px;"><strong><t t-out="n_critical"/></strong></td>
+                </tr>
+                <tr>
+                    <td style="padding:8px;">🟠 Urgent</td>
+                    <td style="padding:8px;"><strong><t t-out="n_urgent"/></strong></td>
+                </tr>
+                <tr style="background:#f5f5f5;">
+                    <td style="padding:8px;">💀 Dead Stock</td>
+                    <td style="padding:8px;"><strong><t t-out="n_dead"/></strong></td>
+                </tr>
+                <tr>
+                    <td style="padding:8px;">💰 Total Est. Purchase Value</td>
+                    <td style="padding:8px;"><strong><t t-out="currency"/> <t t-out="total_value"/></strong></td>
+                </tr>
+            </table>
+
+            <t t-if="critical_items">
+                <p><strong>Critical Items (top 10):</strong></p>
+                <table style="border-collapse:collapse;width:100%;font-size:12px;">
+                    <tr style="background:#e74c3c;color:white;">
+                        <th style="padding:6px;text-align:left;">Part No.</th>
+                        <th style="padding:6px;text-align:left;">Product</th>
+                        <th style="padding:6px;text-align:left;">On Hand</th>
+                        <th style="padding:6px;text-align:left;">Suggest</th>
+                        <th style="padding:6px;text-align:left;">Value</th>
+                    </tr>
+                    <t t-foreach="critical_items" t-as="item">
+                        <tr style="background:#fdecea;">
+                            <td style="padding:5px;"><t t-out="item.default_code or '—'"/></td>
+                            <td style="padding:5px;"><t t-out="item.product_id.display_name"/></td>
+                            <td style="padding:5px;color:#e74c3c;"><strong><t t-out="item.qty_on_hand" t-options='{"widget": "float", "precision": 0}'/></strong></td>
+                            <td style="padding:5px;"><strong><t t-out="item.suggested_reorder_qty" t-options='{"widget": "float", "precision": 0}'/></strong></td>
+                            <td style="padding:5px;"><t t-out="currency"/> <t t-out="item.estimated_purchase_value" t-options='{"widget": "float", "precision": 2}'/></td>
+                        </tr>
+                    </t>
+                </table>
+            </t>
+
+            <p>Open <strong>Reorder Advisor</strong> in Odoo for the full report.</p>
+        </div>
+    </template>
+</odoo>

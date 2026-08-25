@@ -33,7 +33,8 @@
                 }
             </style>
             <t t-foreach="docs" t-as="doc">
-                <div class="page" style="font-family: 'DejaVu Sans', sans-serif; font-size: 11px;">
+                <t t-call="web.external_layout">
+                    <div class="page" style="font-family: 'DejaVu Sans', sans-serif; font-size: 11px;">
 
                     <!-- FIX 6: Pre-declare label dicts ONCE per doc, not via fields_get() per record -->
                     <t t-set="abc_labels" t-value="{'A': 'A - Fast Mover', 'B': 'B - Medium Mover', 'C': 'C - Slow Mover'}"/>
@@ -294,7 +295,8 @@
 <t t-esc="doc.notes"/>
                     </pre>
 
-                </div>
+                    </div>
+                </t>
             </t>
         </t>
     </template>
@@ -333,7 +335,8 @@
 
             <t t-set="warehouses" t-value="docs.mapped('warehouse_id')"/>
             <t t-foreach="warehouses" t-as="warehouse">
-                <div class="page">
+                <t t-call="web.external_layout">
+                    <div class="page">
 
                     <!-- ── REPORT HEADER ── -->
                     <div style="border-bottom:2px solid #2c3e50; padding-bottom:10px; margin-bottom:16px;">
@@ -385,31 +388,35 @@
                     <table width="100%" border="1" cellspacing="0" cellpadding="5"
                            style="border-collapse:collapse; font-size:9px;">
                         <thead>
-                            <tr style="background:#2c3e50; color:white;">
+                            <tr style="background:#2c3e50; color:white; font-size:8px;">
                                 <th align="left">Status</th>
                                 <th align="left">ABC</th>
                                 <th align="left">Part No.</th>
                                 <th align="left">Product</th>
                                 <th align="right">On Hand</th>
+                                <th align="right">Incoming</th>
+                                <th align="right">Outgoing</th>
                                 <th align="right">Net Avail.</th>
-                                <!-- FIX 2 + FIX 8: "Avg/Day" → "Avg/Month" -->
                                 <th align="right">Avg/Month</th>
-                                <!-- FIX 3 + FIX 8: "Months Left" (was "Days Left") -->
                                 <th align="right">Mo. Left</th>
                                 <th align="right">Post-Order Mo.</th>
-                                <!-- FIX 4 + FIX 8: "Lead Mo." (was "Lead Days") -->
                                 <th align="right">Lead Mo.</th>
                                 <th align="right">MOQ</th>
+                                <th align="right">Min</th>
+                                <th align="right">Max</th>
                                 <th align="right">Suggest Reorder</th>
                                 <th align="right">Value</th>
+                                <th align="left">Trend</th>
+                                <th align="left">Pattern</th>
+                                <th align="left">Vendor</th>
+                                <th align="left">Transfer Source</th>
+                                <th align="left">Draft PO</th>
                             </tr>
                         </thead>
                         <tbody>
                             <t t-foreach="wh_docs.sorted(lambda d: d.urgency_rank)" t-as="item">
-                                <!-- FIX 7: urgency_colors dict now includes 'dead' key -->
-                                <tr t-attf-style="background: #{urgency_colors.get(item.urgency, '#f9f9f9')};">
+                                <tr t-attf-style="background: #{urgency_colors.get(item.urgency, '#f9f9f9')}; font-size:7.5px;">
                                     <td>
-                                        <!-- FIX 7: urgency_labels dict now includes 'dead' key -->
                                         <t t-esc="urgency_labels.get(item.urgency, item.urgency)"/>
                                     </td>
                                     <td align="center"><t t-esc="item.abc_class or '-'"/></td>
@@ -419,10 +426,10 @@
                                         t-attf-style="color: #{'e74c3c' if item.qty_on_hand &lt; 0 else '333'}; font-weight: #{'bold' if item.qty_on_hand &lt; 0 else 'normal'};">
                                         <t t-esc="'%.0f' % item.qty_on_hand"/>
                                     </td>
+                                    <td align="right"><t t-esc="'%.0f' % item.qty_incoming"/></td>
+                                    <td align="right"><t t-esc="'%.0f' % item.qty_outgoing"/></td>
                                     <td align="right"><t t-esc="'%.0f' % item.qty_available"/></td>
-                                    <!-- FIX 2: item.avg_daily_demand → item.avg_monthly_demand -->
                                     <td align="right"><t t-esc="'%.2f' % item.avg_monthly_demand"/></td>
-                                    <!-- FIX 3: item.days_of_stock → item.months_of_stock -->
                                     <td align="right"
                                         t-attf-style="color: #{'e74c3c' if item.months_of_stock &lt; 1 else ('e67e22' if item.months_of_stock &lt; 2 else '333')};">
                                         <t t-esc="'%.1f' % item.months_of_stock"/>
@@ -431,9 +438,10 @@
                                         t-attf-style="color: #{'e74c3c' if item.is_overstocked else '333'}; font-weight: #{'bold' if item.is_overstocked else 'normal'};">
                                         <t t-esc="'%.1f' % item.months_of_stock_after_order"/>
                                     </td>
-                                    <!-- FIX 4: item.lead_time_days → item.lead_time_months -->
                                     <td align="right"><t t-esc="'%.1f' % item.lead_time_months"/></td>
                                     <td align="right"><t t-esc="'%.0f' % item.moq"/></td>
+                                    <td align="right"><t t-esc="'%.0f' % item.min_stock_level"/></td>
+                                    <td align="right"><t t-esc="'%.0f' % item.max_stock_level"/></td>
                                     <td align="right" style="font-weight:bold;">
                                         <t t-if="item.reorder_needed">
                                             <t t-esc="'%.0f' % item.suggested_reorder_qty"/>
@@ -446,6 +454,14 @@
                                         </t>
                                         <t t-else="">N/A</t>
                                     </td>
+                                    <td>
+                                        <t t-esc="item.demand_trend or '-'"/>
+                                        (<t t-esc="'%.0f' % item.trend_pct"/>%)
+                                    </td>
+                                    <td><t t-esc="item.sales_pattern or '-'"/></td>
+                                    <td><t t-esc="item.vendor_id.name or '-'"/></td>
+                                    <td><t t-esc="item.transfer_source_warehouse_id.name or '-'"/></td>
+                                    <td><t t-esc="item.draft_po_ref or '-'"/></td>
                                 </tr>
                             </t>
                         </tbody>
@@ -457,6 +473,153 @@
                         <t t-esc="datetime.date.today()"/> |
                         Mo. = Months
                     </p>
+
+                    </div>
+                </t>
+            </t>
+        </t>
+    </template>
+
+    <!-- ══════════════════════════════════════════════════════════
+         BOSS'S WEEKLY ORDER REPORT (Task 3)
+         Vendor-grouped, plain-language, no vendor part codes. Items
+         that can't be safely ordered as-is (no vendor / placeholder
+         vendor / dead-stock-with-negative-stock) are routed to a
+         separate "Needs Attention" section instead of the vendor
+         blocks, so nothing is silently dropped or misrepresented as
+         urgent.
+    ══════════════════════════════════════════════════════════ -->
+
+    <template id="report_boss_weekly_order_document">
+        <t t-call="web.html_container">
+            <style>
+                @font-face {
+                    font-family: 'DejaVu Sans';
+                    src: url('/web/static/fonts/dejavu/DejaVuSans.ttf');
+                }
+                body {
+                    font-family: 'DejaVu Sans', sans-serif;
+                }
+            </style>
+            <t t-call="web.external_layout">
+                <div class="page" style="font-family: 'DejaVu Sans', sans-serif; font-size: 12px;">
+
+                    <t t-set="company_rec" t-value="docs[:1].company_id"/>
+                    <t t-set="config" t-value="env['smart.reorder.config'].sudo().search([('company_id', '=', company_rec.id)], limit=1) if company_rec else False"/>
+                    <t t-set="temp_vendor_ids" t-value="config.temp_vendor_ids.ids if config else []"/>
+
+                    <t t-set="actionable_docs" t-value="docs.filtered(lambda d: d.reorder_needed)"/>
+                    <t t-set="review_docs" t-value="actionable_docs.filtered(
+                        lambda d: not d.vendor_id
+                                  or d.vendor_id.id in temp_vendor_ids
+                                  or (d.is_dead_stock and d.urgency == 'critical')
+                    )"/>
+                    <t t-set="report_docs" t-value="actionable_docs - review_docs"/>
+                    <t t-set="vendors" t-value="report_docs.mapped('vendor_id').sorted(key=lambda v: v.name or '')"/>
+                    <t t-set="currency_sym" t-value="report_docs[0].currency_id.symbol if report_docs else (docs[0].currency_id.symbol if docs else '')"/>
+                    <t t-set="grand_total" t-value="sum(d.suggested_reorder_qty * d.effective_unit_cost for d in report_docs)"/>
+
+                    <t t-set="urgency_labels" t-value="{
+                        'critical': 'Critical',
+                        'urgent':   'Urgent',
+                        'normal':   'Normal',
+                        'dead':     'Dead Stock',
+                        'ok':       'OK'
+                    }"/>
+
+                    <!-- ── HEADER ── -->
+                    <div style="border-bottom: 2px solid #2c3e50; padding-bottom: 10px; margin-bottom: 16px;">
+                        <h2 style="color: #2c3e50; margin: 0;">Weekly Order List</h2>
+                        <p style="margin: 4px 0; color: #666;">
+                            <t t-esc="company_rec.name"/> |
+                            <t t-esc="datetime.date.today()"/> |
+                            Grand Total: <strong><t t-esc="currency_sym"/> <t t-esc="'%.2f' % grand_total"/></strong>
+                        </p>
+                    </div>
+
+                    <t t-if="not vendors">
+                        <p style="color:#27ae60; font-weight:bold;">
+                            Nothing to order this week.
+                        </p>
+                    </t>
+
+                    <!-- ── ONE BLOCK PER VENDOR ── -->
+                    <t t-foreach="vendors" t-as="vendor">
+                        <t t-set="vendor_docs" t-value="report_docs.filtered(lambda d: d.vendor_id.id == vendor.id).sorted(key=lambda d: d.urgency_rank)"/>
+                        <t t-set="vendor_subtotal" t-value="sum(d.suggested_reorder_qty * d.effective_unit_cost for d in vendor_docs)"/>
+
+                        <h3 style="color:#2c3e50; background:#ecf0f1; padding:6px 10px; border-radius:4px; margin-bottom:6px;">
+                            <t t-esc="vendor.name"/>
+                        </h3>
+                        <table width="100%" border="1" cellspacing="0" cellpadding="6"
+                               style="border-collapse:collapse; margin-bottom:6px;">
+                            <thead>
+                                <tr style="background:#2c3e50; color:white;">
+                                    <th align="left">Warehouse</th>
+                                    <th align="left">Product</th>
+                                    <th align="right">Suggested Qty</th>
+                                    <th align="left">Urgency</th>
+                                    <th align="right">Last Purchase Cost</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <t t-foreach="vendor_docs" t-as="item">
+                                    <tr t-attf-style="background: #{'#fdecea' if item.urgency == 'critical' else ('#fef3e2' if item.urgency == 'urgent' else '#f9f9f9')};">
+                                        <td><t t-esc="item.warehouse_id.name"/></td>
+                                        <td><t t-esc="item.product_id.name"/></td>
+                                        <td align="right"><t t-esc="'%.0f' % item.suggested_reorder_qty"/></td>
+                                        <td><t t-esc="urgency_labels.get(item.urgency, item.urgency)"/></td>
+                                        <td align="right"><t t-esc="currency_sym"/> <t t-esc="'%.2f' % item.effective_unit_cost"/></td>
+                                    </tr>
+                                </t>
+                            </tbody>
+                        </table>
+                        <p style="text-align:right; margin:0 0 18px 0; font-weight:bold; color:#2c3e50;">
+                            <t t-esc="vendor.name"/> subtotal: <t t-esc="currency_sym"/> <t t-esc="'%.2f' % vendor_subtotal"/>
+                        </p>
+                    </t>
+
+                    <t t-if="vendors">
+                        <div style="background:#2c3e50; color:white; padding:10px; border-radius:4px; text-align:right; margin-bottom:24px;">
+                            <strong>GRAND TOTAL: <t t-esc="currency_sym"/> <t t-esc="'%.2f' % grand_total"/></strong>
+                        </div>
+                    </t>
+
+                    <!-- ── NEEDS ATTENTION ── -->
+                    <t t-if="review_docs">
+                        <h3 style="color:#e67e22; border-bottom:1px solid #e67e22; padding-bottom:4px;">
+                            ⚠️ Needs Attention Before Ordering
+                        </h3>
+                        <p style="color:#666; font-size:10px; margin-top:0;">
+                            These need a decision by someone in the shop before they can be
+                            ordered — they are intentionally left out of the vendor lists above.
+                        </p>
+                        <table width="100%" border="1" cellspacing="0" cellpadding="6"
+                               style="border-collapse:collapse; font-size:10px;">
+                            <thead>
+                                <tr style="background:#e67e22; color:white;">
+                                    <th align="left">Warehouse</th>
+                                    <th align="left">Product</th>
+                                    <th align="right">Suggested Qty</th>
+                                    <th align="left">Reason</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <t t-foreach="review_docs.sorted(key=lambda d: d.urgency_rank)" t-as="item">
+                                    <tr style="background:#fdf2e9;">
+                                        <td><t t-esc="item.warehouse_id.name"/></td>
+                                        <td><t t-esc="item.product_id.name"/></td>
+                                        <td align="right"><t t-esc="'%.0f' % item.suggested_reorder_qty"/></td>
+                                        <td>
+                                            <t t-if="not item.vendor_id">No vendor assigned</t>
+                                            <t t-elif="item.vendor_id.id in temp_vendor_ids">Temporary/placeholder vendor — assign a real vendor</t>
+                                            <t t-else="">Dead stock with negative balance — verify before reordering</t>
+                                        </td>
+                                    </tr>
+                                </t>
+                            </tbody>
+                        </table>
+                    </t>
 
                 </div>
             </t>

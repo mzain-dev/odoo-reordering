@@ -12,6 +12,22 @@
         <field name="binding_type">report</field>
     </record>
 
+    <!-- Landscape Paperformat for Summary Report -->
+    <record id="paperformat_landscape_summary" model="report.paperformat">
+        <field name="name">Reorder Summary Landscape</field>
+        <field name="format">A4</field>
+        <field name="page_height">0</field>
+        <field name="page_width">0</field>
+        <field name="orientation">Landscape</field>
+        <field name="margin_top">10</field>
+        <field name="margin_bottom">10</field>
+        <field name="margin_left">10</field>
+        <field name="margin_right">10</field>
+        <field name="header_line" eval="False"/>
+        <field name="header_spacing">0</field>
+        <field name="dpi">90</field>
+    </record>
+
     <!-- Summary report: selected products in one PDF -->
     <record id="action_report_reorder_summary" model="ir.actions.report">
         <field name="name">Reorder Summary Report (PDF)</field>
@@ -21,7 +37,18 @@
         <field name="report_file">smart_reorder_advisor.report_reorder_summary_document</field>
         <field name="binding_model_id" ref="model_smart_reorder_suggestion"/>
         <field name="binding_type">report</field>
-        <field name="paperformat_id" ref="base.paperformat_euro"/>
+        <field name="paperformat_id" ref="smart_reorder_advisor.paperformat_landscape_summary"/>
+    </record>
+
+    <!-- Boss's Weekly Order Report (Task 3): vendor-grouped, plain-language -->
+    <record id="action_report_boss_weekly_order" model="ir.actions.report">
+        <field name="name">Weekly Order List (Boss Report)</field>
+        <field name="model">smart.reorder.suggestion</field>
+        <field name="report_type">qweb-pdf</field>
+        <field name="report_name">smart_reorder_advisor.report_boss_weekly_order_document</field>
+        <field name="report_file">smart_reorder_advisor.report_boss_weekly_order_document</field>
+        <field name="binding_model_id" ref="model_smart_reorder_suggestion"/>
+        <field name="binding_type">report</field>
     </record>
 
 </odoo>

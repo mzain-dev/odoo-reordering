@@ -1,6 +1,7 @@
 from datetime import date
 from odoo import models
 import logging
+from .reorder_engine import calculate_replenishment_levels
 
 _logger = logging.getLogger(__name__)
 
@@ -20,57 +21,73 @@ class StockPicking(models.Model):
         result = super()._action_done()
 
         # Only care about outgoing deliveries (customer deliveries)
-        for picking in self.filtered(lambda p: p.picking_type_code == 'outgoing'):
-            config = self.env['smart.reorder.config'].sudo().search(
-                [('company_id', '=', picking.company_id.id)], limit=1
-            )
-            if not config or not config.auto_flag_on_negative:
-                continue
+        outgoing_pickings = self.filtered(lambda p: p.picking_type_code == 'outgoing')
+        if outgoing_pickings:
+            company_ids = outgoing_pickings.mapped('company_id.id')
+            configs = self.env['smart.reorder.config'].sudo().search([('company_id', 'in', company_ids)])
+            config_by_company = {c.company_id.id: c for c in configs}
+            for picking in outgoing_pickings:
+                config = config_by_company.get(picking.company_id.id)
+                if not config or not config.auto_flag_on_negative:
+                    continue
 
-            warehouse = picking.picking_type_id.warehouse_id
-            if not warehouse:
-                continue
+                warehouse = picking.picking_type_id.warehouse_id
+                if not warehouse:
+                    continue
 
-            location = warehouse.lot_stock_id
-            product_ids = picking.move_ids.mapped('product_id.id')
+                location = warehouse.lot_stock_id
+                product_ids = picking.move_ids.mapped('product_id.id')
 
-            if not product_ids:
-                continue
+                if not product_ids:
+                    continue
 
-            # Check which products are now negative in this warehouse
-            quant_data = self.env['stock.quant'].sudo().read_group(
-                domain=[
-                    ('product_id', 'in', product_ids),
-                    ('location_id', 'child_of', location.id),
-                ],
-                fields=['product_id', 'quantity:sum'],
-                groupby=['product_id'],
-            )
+                # Check which products are now negative in this warehouse
+                quant_data = self.env['stock.quant'].sudo().read_group(
+                    domain=[
+                        ('product_id', 'in', product_ids),
+                        ('location_id', 'child_of', location.id),
+                    ],
+                    fields=['product_id', 'quantity:sum'],
+                    groupby=['product_id'],
+                )
 
-            for r in quant_data:
-                if r['quantity'] < 0:
-                    product_id = r['product_id'][0]
-                    try:                  # ← NEW: isolate flagging from delivery
-                        _logger.warning(
-                            'SmartReorder: Negative stock product %d in %s after %s',
-                            product_id, warehouse.name, picking.name
+                flagged_count = 0
+                for r in quant_data:
+                    if r['quantity'] < 0:
+                        product_id = r['product_id'][0]
+                        try:                  # ← NEW: isolate flagging from delivery
+                            _logger.warning(
+                                'SmartReorder: Negative stock product %d in %s after %s',
+                                product_id, warehouse.name, picking.name
+                            )
+                            with self.env.cr.savepoint():
+                                self.env['smart.reorder.suggestion'] \
+                                    ._flag_negative_stock_product(
+                                    product_id=product_id,
+                                    warehouse_id=warehouse.id,
+                                    company_id=picking.company_id.id,
+                                    notify=False,
+                                )
+                            flagged_count += 1
+                        except Exception:  # ← never block delivery
+                            _logger.exception(
+                                'SmartReorder: Auto-flag FAILED for product %d '
+                                '(delivery still completed)', product_id
+                            )
+                            try:
+                                if config:
+                                    with self.env.cr.savepoint():
+                                        config.sudo().write({'picking_hook_error_count': config.picking_hook_error_count + 1})
+                            except Exception:
+                                _logger.error('SmartReorder: Failed to increment picking hook error counter.')
+
+                if flagged_count > 0:
+                    try:
+                        self.env['smart.reorder.suggestion']._send_notifications(
+                            picking.company_id, config, flagged_count, warehouse_id=warehouse.id
                         )
-                        self.env['smart.reorder.suggestion'] \
-                            ._flag_negative_stock_product(
-                            product_id=product_id,
-                            warehouse_id=warehouse.id,
-                            company_id=picking.company_id.id,
-                        )
-                    except Exception:  # ← never block delivery
-                        _logger.exception(
-                            'SmartReorder: Auto-flag FAILED for product %d '
-                            '(delivery still completed)', product_id
-                        )
-                        try:
-                            if config:
-                                config.sudo().write({'picking_hook_error_count': config.picking_hook_error_count + 1})
-                        except Exception:
-                            _logger.error('SmartReorder: Failed to increment picking hook error counter.')
+                    except Exception:
+                        _logger.exception('SmartReorder: Combined negative stock notification FAILED')
 
         # T-20: Receipt Refresh Hook — lightweight targeted refresh after incoming validation.
         # PERFORMANCE NOTE (Obs 1): We deliberately do NOT call generate_suggestions() here,
@@ -80,7 +97,8 @@ class StockPicking(models.Model):
         # warehouse SKU count.
         for picking in self.filtered(lambda p: p.picking_type_code == 'incoming'):
             try:
-                warehouse = picking.picking_type_id.warehouse_id
+                with self.env.cr.savepoint():
+                    warehouse = picking.picking_type_id.warehouse_id
                 if not warehouse:
                     continue
                 product_ids_received = picking.move_ids.mapped('product_id.id')
@@ -167,10 +185,12 @@ class StockPicking(models.Model):
                         lead_months, sug.is_dead_stock, sug.suggested_reorder_qty
                     )
 
-                    demand_lead   = avg_monthly * lead_months
-                    demand_buffer = avg_monthly * sug.safety_buffer_months
-                    raw_qty       = max(0.0, (demand_lead + demand_buffer) - qty_available)
-                    reorder_needed = raw_qty > 0 or qty_on_hand < 0
+                    levels = calculate_replenishment_levels(
+                        avg_monthly, lead_months, sug.safety_buffer_months,
+                        sug.order_cycle_months, qty_available, qty_on_hand, sug.moq,
+                        previously_triggered=sug.reorder_needed
+                    )
+                    reorder_needed = levels['reorder_needed']
 
                     sug.sudo().write({
                         'qty_on_hand':    qty_on_hand,
@@ -190,7 +210,8 @@ class StockPicking(models.Model):
                         [('company_id', '=', picking.company_id.id)], limit=1
                     )
                     if config:
-                        config.sudo().write({'picking_hook_error_count': config.picking_hook_error_count + 1})
+                        with self.env.cr.savepoint():
+                            config.sudo().write({'picking_hook_error_count': config.picking_hook_error_count + 1})
                 except Exception:
                     _logger.error('SmartReorder: Failed to increment picking hook error counter.')
 

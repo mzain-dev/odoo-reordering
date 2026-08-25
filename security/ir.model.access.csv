@@ -3,8 +3,8 @@ access_suggestion_user,smart.reorder.suggestion user,model_smart_reorder_suggest
 access_suggestion_manager,smart.reorder.suggestion manager,model_smart_reorder_suggestion,smart_reorder_advisor.group_smart_reorder_manager,1,1,1,1
 access_config_user,smart.reorder.config user,model_smart_reorder_config,smart_reorder_advisor.group_smart_reorder_user,1,0,0,0
 access_config_manager,smart.reorder.config manager,model_smart_reorder_config,smart_reorder_advisor.group_smart_reorder_manager,1,1,1,1
-access_wizard_user,smart.reorder.wizard manager,model_smart_reorder_wizard,smart_reorder_advisor.group_smart_reorder_manager,1,1,1,1
-access_po_wizard_user,smart.reorder.po.wizard user,model_smart_reorder_po_wizard,smart_reorder_advisor.group_smart_reorder_user,1,1,1,1
+access_wizard_manager,smart.reorder.wizard manager,model_smart_reorder_wizard,smart_reorder_advisor.group_smart_reorder_manager,1,1,1,1
+access_po_wizard_manager,smart.reorder.po.wizard manager,model_smart_reorder_po_wizard,smart_reorder_advisor.group_smart_reorder_manager,1,1,1,1
 access_cron_log_user,smart.reorder.cron.log user,model_smart_reorder_cron_log,smart_reorder_advisor.group_smart_reorder_user,1,0,0,0
 access_cron_log_manager,smart.reorder.cron.log manager,model_smart_reorder_cron_log,smart_reorder_advisor.group_smart_reorder_manager,1,1,1,1
 access_export_wizard_user,smart.reorder.export.wizard user,model_smart_reorder_export_wizard,smart_reorder_advisor.group_smart_reorder_user,1,1,1,1
@@ -14,3 +14,6 @@ access_forecast_snapshot_user,smart.reorder.forecast.snapshot user,model_smart_r
 access_forecast_snapshot_manager,smart.reorder.forecast.snapshot manager,model_smart_reorder_forecast_snapshot,smart_reorder_advisor.group_smart_reorder_manager,1,1,1,1
 access_observability_dashboard_user,smart.reorder.observability.dashboard user,model_smart_reorder_observability_dashboard,smart_reorder_advisor.group_smart_reorder_user,1,1,1,1
 access_observability_dashboard_manager,smart.reorder.observability.dashboard manager,model_smart_reorder_observability_dashboard,smart_reorder_advisor.group_smart_reorder_manager,1,1,1,1
+access_snooze_wizard_user,smart.reorder.snooze.wizard user,model_smart_reorder_snooze_wizard,smart_reorder_advisor.group_smart_reorder_user,1,1,1,1
+access_snooze_wizard_manager,smart.reorder.snooze.wizard manager,model_smart_reorder_snooze_wizard,smart_reorder_advisor.group_smart_reorder_manager,1,1,1,1
+

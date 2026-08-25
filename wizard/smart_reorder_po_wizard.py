@@ -11,6 +11,40 @@ class SmartReorderPoWizard(models.TransientModel):
     _name = 'smart.reorder.po.wizard'
     _description = 'Generate Consolidated POs'
 
+    # Task 8: make the Default Vendor fallback visible BEFORE confirming,
+    # instead of silently applying it inside action_confirm_consolidation —
+    # this is the deliberate place for that fallback to happen (batch flow
+    # with a confirmation step already), it just needs to say so up front.
+    fallback_vendor_count = fields.Integer(
+        string='Items With No Vendor of Their Own',
+        compute='_compute_fallback_vendor_info',
+        help='Of the selected suggestions, how many have no vendor assigned '
+             "and would use each company's configured Default Vendor instead."
+    )
+    fallback_vendor_names = fields.Char(
+        string='Default Vendor(s) That Would Be Used',
+        compute='_compute_fallback_vendor_info',
+    )
+
+    @api.depends_context('active_ids')
+    def _compute_fallback_vendor_info(self):
+        active_ids = self.env.context.get('active_ids') or []
+        no_vendor_suggestions = self.env['smart.reorder.suggestion'].browse(active_ids).filtered(
+            lambda s: s.reorder_needed and not s.vendor_id
+        )
+        for wiz in self:
+            wiz.fallback_vendor_count = len(no_vendor_suggestions)
+            if no_vendor_suggestions:
+                configs = self.env['smart.reorder.config'].sudo().search([
+                    ('company_id', 'in', no_vendor_suggestions.mapped('company_id.id')),
+                ])
+                names = sorted({
+                    c.default_vendor_id.name for c in configs if c.default_vendor_id
+                })
+                wiz.fallback_vendor_names = ', '.join(names) if names else False
+            else:
+                wiz.fallback_vendor_names = False
+
     @require_group(_MANAGER_GROUP)
     def action_confirm_consolidation(self):
         active_ids = self.env.context.get('active_ids')
@@ -19,10 +53,16 @@ class SmartReorderPoWizard(models.TransientModel):
 
         suggestions = self.env['smart.reorder.suggestion'].browse(active_ids)
 
+        company_ids = suggestions.mapped('company_id.id')
+        configs = self.env['smart.reorder.config'].sudo().search([('company_id', 'in', company_ids)])
+        config_by_company = {c.company_id.id: c for c in configs}
+
         # Group and Construct
         grouped_suggestions = {}
         for rec in suggestions:
-            config = rec._get_config(rec.company_id.id)
+            config = config_by_company.get(rec.company_id.id)
+            if not config:
+                config = rec._get_config(rec.company_id.id)
             if not config.allow_draft_po:
                 raise UserError(_('Draft PO creation is disabled for company %s. Enable in Configuration → Company Settings.') % rec.company_id.name)
             if not rec.reorder_needed:
@@ -45,7 +85,7 @@ class SmartReorderPoWizard(models.TransientModel):
         # creating POs for, even though the create() call uses sudo().
         allowed_company_ids = self.env.user.company_ids.ids
         forbidden = [
-            cid for (_, cid, _) in grouped_suggestions
+            cid for (_vendor_id, cid, _warehouse_id) in grouped_suggestions
             if cid not in allowed_company_ids
         ]
         if forbidden:
@@ -59,9 +99,16 @@ class SmartReorderPoWizard(models.TransientModel):
         for (vendor_id, company_id, warehouse_id), recs in grouped_suggestions.items():
             po_lines = []
             vendor = self.env['res.partner'].browse(vendor_id)
+            company = self.env['res.company'].browse(company_id)
+            po_currency = vendor.property_purchase_currency_id or company.currency_id
             for rec in recs:
                 seller = rec.product_id._select_seller(partner_id=vendor, quantity=rec.suggested_reorder_qty)
                 po_price = seller.price if seller else rec.product_cost
+                price_currency = seller.currency_id if (seller and seller.currency_id) else company.currency_id
+                if price_currency != po_currency:
+                    po_price = price_currency._convert(
+                        po_price, po_currency, company, date.today()
+                    )
 
                 po_lines.append(Command.create({
                     'product_id': rec.product_id.id,

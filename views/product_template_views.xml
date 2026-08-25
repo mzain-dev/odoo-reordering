@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <odoo>
+    <!-- Inherits stock view to add inventory page fields and stat buttons in the button box -->
     <record id="product_template_form_view_inherit_smart_reorder" model="ir.ui.view">
         <field name="name">product.template.form.inherit.smart.reorder</field>
         <field name="model">product.template</field>
@@ -9,6 +10,9 @@
                 <button name="action_view_predecessors" type="object" class="oe_stat_button" icon="fa-history" invisible="predecessor_count == 0">
                     <field name="predecessor_count" widget="statinfo" string="Predecessors"/>
                 </button>
+                <button name="action_view_reorder_suggestions" type="object" class="oe_stat_button" icon="fa-shopping-cart" invisible="reorder_suggestion_count == 0">
+                    <field name="reorder_suggestion_count" widget="statinfo" string="Reorder Suggestions"/>
+                </button>
             </xpath>
             <xpath expr="//page[@name='inventory']" position="inside">
                 <group string="Smart Reorder Advisor">
@@ -16,6 +20,15 @@
                     <field name="reorder_behavior" widget="radio"/>
                 </group>
             </xpath>
+        </field>
+    </record>
+
+    <!-- Inherits purchase view separately to safely modify the purchase page (avoiding validation crashes if pages do not exist in the stock parent view) -->
+    <record id="product_template_form_view_inherit_purchase_smart_reorder" model="ir.ui.view">
+        <field name="name">product.template.form.inherit.purchase.smart.reorder</field>
+        <field name="model">product.template</field>
+        <field name="inherit_id" ref="product.product_template_only_form_view"/>
+        <field name="arch" type="xml">
             <xpath expr="//page[@name='purchase']" position="inside">
                 <group string="Smart Reorder - Supersession">
                     <field name="superseded_by_id"/>

@@ -4,6 +4,7 @@ from odoo.exceptions import UserError
 from odoo.tools import float_round
 from odoo.tools.sql import create_index
 from datetime import date, timedelta
+from dateutil.relativedelta import relativedelta
 
 
 class ForecastSnapshot(models.Model):
@@ -16,12 +17,12 @@ class ForecastSnapshot(models.Model):
     product_id = fields.Many2one('product.product', string='Product', required=True, readonly=True, ondelete='cascade', index=True)
     snapshot_date = fields.Date(string='Snapshot Date', required=True, readonly=True, default=fields.Date.context_today, index=True)
 
-    forecast_demand = fields.Float(string='Forecast Demand (Monthly)', readonly=True)
+    forecast_demand = fields.Float(string='Forecast Demand (Monthly)', digits='Product Unit of Measure', readonly=True)
     confidence = fields.Float(string='Forecast Confidence', readonly=True)
     lead_time_days = fields.Integer(string='Lead Time (Days)', readonly=True)
     abc_class = fields.Selection([('A', 'A'), ('B', 'B'), ('C', 'C')], string='ABC Class', readonly=True)
     
-    actual_sales = fields.Float(string='Actual Sales (since)', readonly=True)
+    actual_sales = fields.Float(string='Actual Sales (since)', digits='Product Unit of Measure', readonly=True)
     absolute_error_pct = fields.Float(string='MAPE (%)', readonly=True, digits=(16, 2))
     evaluated = fields.Boolean(string='Evaluated', default=False, readonly=True, index=True)
 
@@ -122,7 +123,7 @@ class ForecastSnapshot(models.Model):
                     AND so.warehouse_id = iv.warehouse_id
                     AND so.state        = 'sale'
                     AND so.date_order  >= iv.date_start
-                    AND so.date_order  <= iv.date_end
+                    AND so.date_order   < iv.date_end + interval '1 day'
                 LEFT JOIN sale_order_line sol
                     ON  sol.order_id   = so.id
                     AND sol.product_id = iv.product_id
@@ -172,6 +173,19 @@ class ForecastSnapshot(models.Model):
                 WHERE t.id = v.id
             """)
             to_evaluate.invalidate_recordset(['actual_sales', 'absolute_error_pct', 'evaluated'])
+
+        # R2: Purge expired snapshots based on retention configuration
+        configs = self.env['smart.reorder.config'].sudo().search(
+            [('snapshot_retention_months', '>', 0)]
+        )
+        for config in configs:
+            limit_date = today - relativedelta(months=config.snapshot_retention_months)
+            expired_snaps = self.sudo().search([
+                ('company_id', '=', config.company_id.id),
+                ('snapshot_date', '<', limit_date),
+            ])
+            if expired_snaps:
+                expired_snaps.unlink()
 
     def action_evaluate(self):
         # Restriction: Manager Group Only

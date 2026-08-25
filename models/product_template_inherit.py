@@ -42,8 +42,17 @@ class ProductTemplate(models.Model):
     )
 
     def _compute_predecessor_count(self):
+        counts = {}
+        if self.ids:
+            self.env.cr.execute("""
+                SELECT superseded_by_id, COUNT(*)
+                FROM product_template
+                WHERE superseded_by_id = ANY(%s)
+                GROUP BY superseded_by_id
+            """, [self.ids])
+            counts = dict(self.env.cr.fetchall())
         for rec in self:
-            rec.predecessor_count = self.search_count([('superseded_by_id', '=', rec.id)])
+            rec.predecessor_count = counts.get(rec.id, 0)
 
     def action_view_predecessors(self):
         self.ensure_one()
@@ -54,5 +63,38 @@ class ProductTemplate(models.Model):
             'res_model': 'product.template',
             'view_mode': 'tree,form',
             'domain': [('id', 'in', predecessors.ids)],
+            'target': 'current',
+        }
+
+    reorder_suggestion_count = fields.Integer(
+        string='Reorder Suggestion Count',
+        compute='_compute_reorder_suggestion_count'
+    )
+
+    def _compute_reorder_suggestion_count(self):
+        counts = {}
+        if self.ids:
+            self.env.cr.execute("""
+                SELECT pt.id, COUNT(s.id)
+                FROM smart_reorder_suggestion s
+                JOIN product_product pp ON pp.id = s.product_id
+                JOIN product_template pt ON pt.id = pp.product_tmpl_id
+                WHERE s.active = true
+                  AND s.company_id = ANY(%s)
+                  AND pt.id = ANY(%s)
+                GROUP BY pt.id
+            """, [list(self.env.companies.ids), list(self.ids)])
+            counts = dict(self.env.cr.fetchall())
+        for rec in self:
+            rec.reorder_suggestion_count = counts.get(rec.id, 0)
+
+    def action_view_reorder_suggestions(self):
+        self.ensure_one()
+        return {
+            'name': _('Reorder Suggestions'),
+            'type': 'ir.actions.act_window',
+            'res_model': 'smart.reorder.suggestion',
+            'view_mode': 'tree,form',
+            'domain': [('product_id.product_tmpl_id', '=', self.id)],
             'target': 'current',
         }

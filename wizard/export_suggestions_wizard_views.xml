@@ -17,6 +17,9 @@
                         currently active in the list — to an Excel (.xlsx) file.
                     </p>
                 </group>
+                <group string="Format">
+                    <field name="export_format" widget="radio"/>
+                </group>
                 <footer>
                     <button name="action_export"
                             string="📊 Export to Excel"

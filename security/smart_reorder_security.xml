@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <odoo>
-    <data noupdate="1">
+    <data>
 
         <!--
         ╔══════════════════════════════════════════════════════════════╗
@@ -32,6 +32,9 @@
             <field name="users" eval="[(4, ref('base.user_root')), (4, ref('base.user_admin'))]"/>
         </record>
 
+    </data>
+
+    <data>
         <!--
         Record Rules: Multi-company isolation.
         Everyone in the module's groups (Managers imply the User group, so
@@ -41,54 +44,31 @@
         <record id="rule_suggestion_company" model="ir.rule">
             <field name="name">Smart Reorder: Company isolation</field>
             <field name="model_id" ref="model_smart_reorder_suggestion"/>
-            <field name="groups" eval="[(4, ref('group_smart_reorder_user'))]"/>
-            <field name="domain_force">
-                [('company_id', 'in', company_ids)]
-            </field>
-            <field name="perm_read" eval="True"/>
-            <field name="perm_write" eval="False"/>
-            <field name="perm_create" eval="False"/>
-            <field name="perm_unlink" eval="False"/>
+            <field name="domain_force">[('company_id', 'in', company_ids)]</field>
         </record>
 
         <record id="rule_config_company" model="ir.rule">
             <field name="name">Smart Reorder Config: Company isolation</field>
             <field name="model_id" ref="model_smart_reorder_config"/>
-            <field name="groups" eval="[(4, ref('group_smart_reorder_user'))]"/>
-            <field name="domain_force">
-                [('company_id', 'in', company_ids)]
-            </field>
+            <field name="domain_force">[('company_id', 'in', company_ids)]</field>
         </record>
 
         <record id="rule_cron_log_company" model="ir.rule">
             <field name="name">Smart Reorder Cron Log: Company isolation</field>
             <field name="model_id" ref="model_smart_reorder_cron_log"/>
-            <field name="groups" eval="[(4, ref('group_smart_reorder_user'))]"/>
-            <field name="domain_force">
-                [('company_id', 'in', company_ids)]
-            </field>
+            <field name="domain_force">[('company_id', 'in', company_ids)]</field>
         </record>
 
         <record id="rule_transfer_lane_company" model="ir.rule">
             <field name="name">Smart Reorder Transfer Lane: Company isolation</field>
             <field name="model_id" ref="model_smart_reorder_transfer_lane"/>
-            <field name="groups" eval="[(4, ref('group_smart_reorder_user'))]"/>
-            <field name="domain_force">
-                [('company_id', 'in', company_ids)]
-            </field>
+            <field name="domain_force">[('company_id', 'in', company_ids)]</field>
         </record>
 
-        <!-- Without this rule, any Reorder User could read every company's
-             forecast/demand history through the Back-testing menu — the
-             dashboard RPC filters explicitly, but the plain list view relied
-             on a record rule that didn't exist. -->
         <record id="rule_forecast_snapshot_company" model="ir.rule">
             <field name="name">Smart Reorder Forecast Snapshot: Company isolation</field>
             <field name="model_id" ref="model_smart_reorder_forecast_snapshot"/>
-            <field name="groups" eval="[(4, ref('group_smart_reorder_user'))]"/>
-            <field name="domain_force">
-                [('company_id', 'in', company_ids)]
-            </field>
+            <field name="domain_force">[('company_id', 'in', company_ids)]</field>
         </record>
 
     </data>
