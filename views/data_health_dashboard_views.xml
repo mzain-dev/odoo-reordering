@@ -1,0 +1,71 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+
+    <record id="view_smart_reorder_data_health_dashboard_form" model="ir.ui.view">
+        <field name="name">smart.reorder.data.health.dashboard.form</field>
+        <field name="model">smart.reorder.data.health.dashboard</field>
+        <field name="arch" type="xml">
+            <form string="Data Quality / Setup Health" create="false" edit="false" delete="false">
+                <sheet>
+                    <div class="oe_title">
+                        <h1>Data Quality / Setup Health</h1>
+                        <p class="text-muted">
+                            None of these are errors — they just quietly weaken the
+                            forecast for that product until fixed.
+                        </p>
+                    </div>
+                    <field name="company_id" invisible="1"/>
+                    <group>
+                        <field name="total_active_products" readonly="1"/>
+                    </group>
+
+                    <group string="Gaps — click Open List to see the affected products">
+                        <group>
+                            <label for="missing_cost_count" string="Missing Standard Cost"/>
+                            <div class="o_row">
+                                <field name="missing_cost_count" readonly="1" nolabel="1"/>
+                                <button name="action_view_missing_cost" string="Open List →" type="object"
+                                        class="btn-link" invisible="not missing_cost_count"/>
+                            </div>
+
+                            <label for="missing_vendor_count" string="No Vendor At All"/>
+                            <div class="o_row">
+                                <field name="missing_vendor_count" readonly="1" nolabel="1"/>
+                                <button name="action_view_missing_vendor" string="Open List →" type="object"
+                                        class="btn-link" invisible="not missing_vendor_count"/>
+                            </div>
+                        </group>
+                        <group>
+                            <label for="missing_part_number_count" string="Missing Part Number"/>
+                            <div class="o_row">
+                                <field name="missing_part_number_count" readonly="1" nolabel="1"/>
+                                <button name="action_view_missing_part_number" string="Open List →" type="object"
+                                        class="btn-link" invisible="not missing_part_number_count"/>
+                            </div>
+
+                            <label for="temp_vendor_only_count" string="Only a Placeholder Vendor"/>
+                            <div class="o_row">
+                                <field name="temp_vendor_only_count" readonly="1" nolabel="1"/>
+                            </div>
+                        </group>
+                    </group>
+                    <div class="text-muted" style="font-size:11px; padding-top:8px;">
+                        "Only a Placeholder Vendor" means the product has a supplier
+                        record, but it's tagged as Temporary/Placeholder in
+                        Configuration → Company Settings — use Bulk Assign Vendor
+                        from the "Needs Vendor Assignment" list (Reorder Suggestions
+                        menu) to fix these.
+                    </div>
+                </sheet>
+            </form>
+        </field>
+    </record>
+
+    <record id="action_smart_reorder_data_health_dashboard" model="ir.actions.server">
+        <field name="name">Data Quality / Setup Health</field>
+        <field name="model_id" ref="model_smart_reorder_data_health_dashboard"/>
+        <field name="state">code</field>
+        <field name="code">action = model.action_open_dashboard()</field>
+    </record>
+
+</odoo>

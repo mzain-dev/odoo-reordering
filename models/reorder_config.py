@@ -183,6 +183,22 @@ class SmartReorderConfig(models.Model):
              'Raise this for catalogs with large one-off orders; lower it if genuine small '
              'spikes are being averaged in and inflating the forecast.'
     )
+    spike_dominance_pct = fields.Float(
+        string='Spike Dominance Threshold (%)',
+        default=50.0,
+        help='A month can only be excluded as a one-time spike if it makes up at '
+             'least this percentage of total sales across the whole analysis window. '
+             'Lower it to catch spikes that are large but do not quite dominate the '
+             'total; raise it to only exclude something that overwhelms everything else.'
+    )
+    spike_multiplier = fields.Float(
+        string='Spike Multiplier vs. Next-Highest Month',
+        default=4.0,
+        help='A month can only be excluded as a one-time spike if it is at least this '
+             'many times larger than the next-highest month in the window. Lower it '
+             'toward 2-3x to more readily treat a lumpy-but-real bulk-order pattern as '
+             'a fluke; raise it toward 5-6x to only exclude a truly isolated spike.'
+    )
 
     # ── Vendor Performance (Phase 3) ──────────────────────────────────────────
     track_vendor_performance = fields.Boolean(
@@ -229,6 +245,14 @@ class SmartReorderConfig(models.Model):
         help='Purge forecast snapshots older than this many months. Set to 0 to keep forever.'
     )
 
+    cron_log_retention_months = fields.Integer(
+        string='Run History Retention (Months)',
+        default=12,
+        help='Purge Run History log entries (smart.reorder.cron.log) older than this '
+             'many months, checked at the end of each weekly cron run. Set to 0 to '
+             'keep forever. A running (in-progress) log is never purged.'
+    )
+
     transfer_surplus_threshold = fields.Float(
         string='Transfer Surplus Threshold (Months)',
         default=6.0,
@@ -266,6 +290,14 @@ class SmartReorderConfig(models.Model):
         default=0,
         readonly=True,
         help='Total number of errors encountered during real-time picking hooks (auto-flag / receipt-refresh).'
+    )
+
+    # ── Overdue Run Heartbeat (Recommendation) ──────────────────────────────────
+    overdue_alert_sent = fields.Boolean(
+        string='Overdue Alert Already Sent?', default=False, readonly=True,
+        help='Internal dedupe flag so the daily overdue-run heartbeat check '
+             'notifies once per overdue episode, not every day it stays overdue. '
+             'Cleared automatically once a run completes successfully again.'
     )
 
     # ── Run Lock (T-21 / T-22) ─────────────────────────────────────────────────
@@ -345,7 +377,7 @@ class SmartReorderConfig(models.Model):
         ('company_unique', 'UNIQUE(company_id)', 'Only one configuration allowed per company.'),
     ]
 
-    @api.constrains('safety_buffer_months', 'default_lead_time_months', 'order_cycle_months', 'overstock_ceiling_months', 'alt_vendor_lead_margin_days', 'snapshot_retention_months', 'transfer_surplus_threshold', 'default_internal_transfer_days', 'stale_draft_po_days')
+    @api.constrains('safety_buffer_months', 'default_lead_time_months', 'order_cycle_months', 'overstock_ceiling_months', 'alt_vendor_lead_margin_days', 'snapshot_retention_months', 'transfer_surplus_threshold', 'default_internal_transfer_days', 'stale_draft_po_days', 'cron_log_retention_months')
     def _check_positive_months(self):
         for rec in self:
             if rec.safety_buffer_months < 0:
@@ -366,6 +398,8 @@ class SmartReorderConfig(models.Model):
                 raise ValidationError(_('Default internal transfer lead time (Days) cannot be negative.'))
             if rec.stale_draft_po_days < 0:
                 raise ValidationError(_('Stale Draft PO Alert Threshold cannot be negative.'))
+            if rec.cron_log_retention_months < 0:
+                raise ValidationError(_('Run History Retention cannot be negative.'))
 
     @api.constrains('needs_review_delta_threshold')
     def _check_needs_review_delta_threshold(self):
@@ -384,6 +418,14 @@ class SmartReorderConfig(models.Model):
         for rec in self:
             if rec.min_spike_size < 0:
                 raise ValidationError(_('Minimum One-Time Spike Size cannot be negative.'))
+
+    @api.constrains('spike_dominance_pct', 'spike_multiplier')
+    def _check_spike_thresholds(self):
+        for rec in self:
+            if not (0 < rec.spike_dominance_pct <= 100):
+                raise ValidationError(_('Spike Dominance Threshold must be between 0 and 100%.'))
+            if rec.spike_multiplier < 1:
+                raise ValidationError(_('Spike Multiplier vs. Next-Highest Month must be at least 1.'))
 
     _CRON_FREQUENCY_INTERVALS = {
         'weekly':   (1, 'weeks'),
@@ -482,3 +524,63 @@ class SmartReorderConfig(models.Model):
             'finished_at': fields.Datetime.now(),
             'error_notes': _('Manually cleared by %s.') % self.env.user.name,
         })
+
+    @api.model
+    def _check_overdue_runs(self):
+        """Recommendation: cron missed-run detection. The dashboard's
+        is_run_overdue field only helps someone who thinks to go look at it —
+        this is the active half: a lightweight daily heartbeat that notifies
+        notify_user_ids once (not every day) when the weekly analysis hasn't
+        completed successfully in longer than its configured frequency allows,
+        so a stuck worker or an accidentally-disabled cron doesn't go silently
+        unnoticed until someone asks "why haven't I gotten a report in weeks"."""
+        from .cron_log import CRON_FREQUENCY_DAYS, CRON_OVERDUE_GRACE_MULTIPLIER
+
+        cron = self.env.ref('smart_reorder_advisor.cron_smart_reorder_weekly', raise_if_not_found=False)
+        if not cron or not cron.active:
+            return
+
+        CronLog = self.env['smart.reorder.cron.log'].sudo()
+        now = fields.Datetime.now()
+        configs = self.sudo().search([])
+        for config in configs:
+            expected_days = CRON_FREQUENCY_DAYS.get(config.cron_frequency, 7)
+            grace_days = expected_days * CRON_OVERDUE_GRACE_MULTIPLIER
+
+            last_log = CronLog.search([
+                ('company_id', '=', config.company_id.id),
+                ('status', 'in', ('completed', 'completed_with_errors')),
+            ], order='finished_at desc', limit=1)
+
+            if last_log and last_log.finished_at:
+                overdue = (now - last_log.finished_at).days > grace_days
+            else:
+                overdue = bool(cron.nextcall and cron.nextcall < now)
+
+            if overdue and not config.overdue_alert_sent:
+                if config.notify_user_ids:
+                    subject = _('%(prefix)s ⚠️ Weekly Analysis is overdue — %(company)s') % {
+                        'prefix': config.email_subject_prefix,
+                        'company': config.company_id.name,
+                    }
+                    last_run_str = last_log.finished_at if last_log else _('never')
+                    body = _(
+                        '<p>The Smart Reorder weekly analysis has not completed '
+                        'successfully in over %(grace)d days for <strong>%(company)s</strong>.</p>'
+                        '<p>Last successful run: %(last_run)s.</p>'
+                        '<p>Check <em>Settings → Technical → Scheduled Actions</em> and '
+                        '<em>Smart Reorder → Run History</em> for errors.</p>'
+                    ) % {
+                        'grace': grace_days,
+                        'company': config.company_id.name,
+                        'last_run': last_run_str,
+                    }
+                    self.env['mail.thread'].sudo().message_notify(
+                        partner_ids=config.notify_user_ids.mapped('partner_id').ids,
+                        subject=subject,
+                        body=body,
+                        subtype_xmlid='mail.mt_comment',
+                    )
+                config.sudo().write({'overdue_alert_sent': True})
+            elif not overdue and config.overdue_alert_sent:
+                config.sudo().write({'overdue_alert_sent': False})

@@ -28,139 +28,173 @@
                         (or is treated as stuck after 60 minutes).
                     </div>
 
-                    <div class="row">
-                        <div class="col-md-6">
-                            <group string="📊 Phase 1 — Analysis Settings (Monthly)">
+                    <!--
+                    Reorganized (Recommendation): grouped by what each setting
+                    actually controls, instead of the original "Phase 1/2/3"
+                    build-order labels — those meant something during
+                    incremental development but nothing to someone opening
+                    this form today. Every field below is unchanged; only the
+                    grouping and labels changed.
+                    -->
+                    <notebook>
+
+                        <page string="📊 Demand &amp; Forecasting">
+                            <group string="Sales Analysis Window">
                                 <field name="analysis_period" widget="radio"/>
-                                <field name="safety_buffer_months"/>
-                                <field name="order_cycle_months"/>
-                                <field name="order_cycle_is_manual" readonly="1"
-                                       invisible="not order_cycle_is_manual"/>
-                                <field name="default_lead_time_months"/>
-                            </group>
-                        </div>
-                        <div class="col-md-6" style="margin-top: 1.5rem;">
-                            <div class="alert alert-info" role="alert" style="margin: 0;">
-                                <strong>Monthly demand explained:</strong><br/>
-                                If a part sold 18 units over 6 months → 3 units/month avg.<br/>
-                                Lead time 1.5 months + 1 month buffer = 2.5 months demand needed.<br/>
-                                2.5 × 3 = <strong>7.5 units → rounded up to MOQ</strong>
-                            </div>
-                        </div>
-                    </div>
-
-                    <group string="📦 Phase 1 — Dead Stock &amp; Budget">
-                        <group>
-                            <field name="flag_dead_stock"/>
-                            <field name="dead_stock_months"
-                                   invisible="not flag_dead_stock"/>
-                        </group>
-                        <group>
-                            <field name="budget_cap"/>
-                        </group>
-                    </group>
-
-                    <div class="row">
-                        <div class="col-md-6">
-                            <group string="🔤 ABC Thresholds (Monthly Demand)">
-                                <field name="abc_a_threshold"/>
-                                <field name="abc_b_threshold"/>
-                            </group>
-                        </div>
-                        <div class="col-md-6" style="margin-top: 1.5rem;">
-                            <div class="alert alert-warning" role="alert" style="margin: 0;">
-                                A ≥ <field name="abc_a_threshold" nolabel="1" readonly="1"/> units/month → Fast Mover<br/>
-                                B ≥ <field name="abc_b_threshold" nolabel="1" readonly="1"/> units/month → Medium<br/>
-                                Below B → C (Slow Mover)
-                            </div>
-                        </div>
-                    </div>
-
-                    <div class="row">
-                        <div class="col-md-6">
-                            <group string="🎯 One-Time Spike Detection">
-                                <field name="min_spike_size"/>
-                            </group>
-                        </div>
-                        <div class="col-md-6" style="margin-top: 1.5rem;">
-                            <div class="alert alert-warning" role="alert" style="margin: 0;">
-                                A month is only excluded as a one-time bulk-order spike if it
-                                sells at least <field name="min_spike_size" nolabel="1" readonly="1"/> units.
-                                A single small sale (e.g. 1–3 units) below this size is averaged
-                                in normally, not zeroed out.
-                            </div>
-                        </div>
-                    </div>
-
-                    <div class="row">
-                        <div class="col-md-6">
-                            <group string="📅 Scheduling">
-                                <field name="cron_frequency" widget="radio"/>
+                                <field name="trend_comparison_months"/>
                                 <field name="cron_include_zero_demand"/>
                             </group>
-                        </div>
-                        <div class="col-md-6" style="margin-top: 1.5rem;">
-                            <div class="alert alert-info" role="alert" style="margin: 0;">
-                                Saving this updates the <strong>Smart Reorder: Weekly Analysis</strong>
-                                scheduled action directly — no need to open
-                                <em>Settings → Technical → Scheduled Actions</em>.
-                                That cron processes every company in one run, so this
-                                setting is effectively system-wide: whichever company's
-                                config is saved most recently wins.
-                            </div>
-                        </div>
-                    </div>
 
-                    <div class="row">
-                        <div class="col-md-6">
-                            <group string="📈 Phase 2 — Demand Trend Settings">
-                                <field name="trend_comparison_months"/>
+                            <div class="row">
+                                <div class="col-md-6">
+                                    <group string="ABC Thresholds (Monthly Demand)">
+                                        <field name="abc_a_threshold"/>
+                                        <field name="abc_b_threshold"/>
+                                    </group>
+                                </div>
+                                <div class="col-md-6" style="margin-top: 1.5rem;">
+                                    <div class="alert alert-warning" role="alert" style="margin: 0;">
+                                        A ≥ <field name="abc_a_threshold" nolabel="1" readonly="1"/> units/month → Fast Mover<br/>
+                                        B ≥ <field name="abc_b_threshold" nolabel="1" readonly="1"/> units/month → Medium<br/>
+                                        Below B → C (Slow Mover)
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div class="row">
+                                <div class="col-md-6">
+                                    <group string="One-Time Spike Detection">
+                                        <field name="min_spike_size"/>
+                                        <field name="spike_dominance_pct"/>
+                                        <field name="spike_multiplier"/>
+                                    </group>
+                                </div>
+                                <div class="col-md-6" style="margin-top: 1.5rem;">
+                                    <div class="alert alert-warning" role="alert" style="margin: 0;">
+                                        A month is only excluded as a one-time bulk-order spike if
+                                        <strong>all three</strong> are true: it sells at least
+                                        <field name="min_spike_size" nolabel="1" readonly="1"/> units,
+                                        it makes up at least
+                                        <field name="spike_dominance_pct" nolabel="1" readonly="1"/>%
+                                        of total sales in the window, and it is at least
+                                        <field name="spike_multiplier" nolabel="1" readonly="1"/>×
+                                        the next-highest month. A single small sale (e.g. 1–3 units)
+                                        below the minimum size is always averaged in normally, never
+                                        zeroed out.
+                                    </div>
+                                </div>
+                            </div>
+                        </page>
+
+                        <page string="📦 Stock Policy (Min/Max)">
+                            <div class="row">
+                                <div class="col-md-6">
+                                    <group string="Reorder Point &amp; Order-Up-To Level">
+                                        <field name="safety_buffer_months"/>
+                                        <field name="order_cycle_months"/>
+                                        <field name="order_cycle_is_manual" readonly="1"
+                                               invisible="not order_cycle_is_manual"/>
+                                        <field name="default_lead_time_months"/>
+                                        <field name="overstock_ceiling_months"/>
+                                    </group>
+                                </div>
+                                <div class="col-md-6" style="margin-top: 1.5rem;">
+                                    <div class="alert alert-info" role="alert" style="margin: 0;">
+                                        <strong>Monthly demand explained:</strong><br/>
+                                        If a part sold 18 units over 6 months → 3 units/month avg.<br/>
+                                        Lead time 1.5 months + 1 month buffer = 2.5 months demand needed.<br/>
+                                        2.5 × 3 = <strong>7.5 units → rounded up to MOQ</strong>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <group string="Dead Stock &amp; Budget">
+                                <group>
+                                    <field name="flag_dead_stock"/>
+                                    <field name="dead_stock_months"
+                                           invisible="not flag_dead_stock"/>
+                                </group>
+                                <group>
+                                    <field name="budget_cap"/>
+                                </group>
+                            </group>
+                        </page>
+
+                        <page string="🚚 Vendor &amp; Purchasing">
+                            <group string="Draft Purchase Orders">
+                                <field name="allow_draft_po"/>
+                                <field name="default_vendor_id"
+                                       invisible="not allow_draft_po"/>
+                                <field name="stale_draft_po_days"
+                                       invisible="not allow_draft_po"/>
+                            </group>
+                            <group string="Vendor Performance">
+                                <field name="track_vendor_performance"/>
+                                <field name="alt_vendor_lead_margin_days"/>
+                            </group>
+                            <group string="Boss's Weekly Order Report">
+                                <field name="temp_vendor_ids" widget="many2many_tags"/>
+                                <div class="text-muted" colspan="2" style="padding:4px 0 8px 0; font-size:12px;">
+                                    Suggestions still assigned to one of these vendors (or with no
+                                    vendor at all) are excluded from the boss's weekly order report
+                                    and listed separately under "Needs Attention" instead.
+                                </div>
+                            </group>
+                        </page>
+
+                        <page string="🔔 Notifications &amp; Delivery">
+                            <div class="row">
+                                <div class="col-md-6">
+                                    <group string="Scheduling">
+                                        <field name="cron_frequency" widget="radio"/>
+                                    </group>
+                                </div>
+                                <div class="col-md-6" style="margin-top: 1.5rem;">
+                                    <div class="alert alert-info" role="alert" style="margin: 0;">
+                                        Saving this updates the <strong>Smart Reorder: Weekly Analysis</strong>
+                                        scheduled action directly — no need to open
+                                        <em>Settings → Technical → Scheduled Actions</em>.
+                                        That cron processes every company in one run, so this
+                                        setting is effectively system-wide: whichever company's
+                                        config is saved most recently wins.
+                                    </div>
+                                </div>
+                            </div>
+
+                            <group string="Email Report">
                                 <field name="send_email_report"/>
                                 <field name="email_subject_prefix"
                                        invisible="not send_email_report"/>
                             </group>
-                        </div>
-                        <div class="col-md-6">
-                            <group string="🔔 Notification Settings">
+                            <group string="Inbox &amp; Real-Time Alerts">
                                 <field name="notify_user_ids" widget="many2many_tags"/>
                                 <field name="critical_notify_only"/>
+                                <field name="auto_flag_on_negative"/>
+                                <field name="picking_hook_error_count" readonly="1" decoration-danger="picking_hook_error_count &gt; 0"/>
                             </group>
-                        </div>
-                    </div>
+                        </page>
 
-                    <group string="⚙️ Phase 3 — Advanced Features">
-                        <group>
-                            <field name="allow_draft_po"/>
-                            <field name="default_vendor_id"
-                                   invisible="not allow_draft_po"/>
-                            <field name="stale_draft_po_days"
-                                   invisible="not allow_draft_po"/>
-                            <field name="auto_flag_on_negative"/>
-                            <field name="picking_hook_error_count" readonly="1" decoration-danger="picking_hook_error_count &gt; 0"/>
-                        </group>
-                        <group>
-                            <field name="track_vendor_performance"/>
-                            <field name="alt_vendor_lead_margin_days"/>
-                            <field name="snapshot_scope"/>
-                            <field name="snapshot_retention_months"/>
-                            <field name="transfer_surplus_threshold"/>
-                            <field name="default_internal_transfer_days"/>
-                        </group>
-                    </group>
+                        <page string="🔎 Review &amp; Data Quality">
+                            <group string="Needs-Review Auto-Triage">
+                                <field name="needs_review_delta_threshold"/>
+                            </group>
+                        </page>
 
-                    <group string="🔎 Needs-Review Auto-Triage">
-                        <field name="needs_review_delta_threshold"/>
-                        <field name="overstock_ceiling_months"/>
-                    </group>
+                        <page string="⚙️ Advanced">
+                            <group string="Forecast Back-testing">
+                                <field name="snapshot_scope"/>
+                                <field name="snapshot_retention_months"/>
+                            </group>
+                            <group string="Retention">
+                                <field name="cron_log_retention_months"/>
+                            </group>
+                            <group string="Inter-Warehouse Transfers">
+                                <field name="transfer_surplus_threshold"/>
+                                <field name="default_internal_transfer_days"/>
+                            </group>
+                        </page>
 
-                    <group string="📋 Boss's Weekly Order Report">
-                        <field name="temp_vendor_ids" widget="many2many_tags"/>
-                        <div class="text-muted" colspan="2" style="padding:4px 0 8px 0; font-size:12px;">
-                            Suggestions still assigned to one of these vendors (or with no
-                            vendor at all) are excluded from the boss's weekly order report
-                            and listed separately under "Needs Attention" instead.
-                        </div>
-                    </group>
+                    </notebook>
                 </sheet>
             </form>
         </field>

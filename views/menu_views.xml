@@ -5,6 +5,13 @@
               groups="smart_reorder_advisor.group_smart_reorder_user"
               sequence="85"/>
 
+    <!-- Action Center (Recommendation) — the six triage flags, one ranked list -->
+    <menuitem id="menu_smart_reorder_action_center"
+              name="🧭 Action Center"
+              parent="menu_smart_reorder_root"
+              action="action_smart_reorder_action_center"
+              sequence="0"/>
+
     <menuitem id="menu_smart_reorder_dashboard"
               name="Dashboard"
               parent="menu_smart_reorder_root"
@@ -46,6 +53,16 @@
               parent="menu_smart_reorder_suggestions"
               action="action_smart_reorder_all"
               sequence="6"/>
+    <menuitem id="menu_smart_reorder_needs_vendor_assignment"
+              name="Needs Vendor Assignment"
+              parent="menu_smart_reorder_suggestions"
+              action="action_smart_reorder_needs_vendor_assignment"
+              sequence="7"/>
+    <menuitem id="menu_smart_reorder_dead_stock_critical_review"
+              name="Dead Stock + Critical — Needs Review"
+              parent="menu_smart_reorder_suggestions"
+              action="action_smart_reorder_dead_stock_critical_review"
+              sequence="8"/>
 
     <!-- Generate wizard -->
     <menuitem id="menu_smart_reorder_generate"
@@ -62,6 +79,13 @@
               action="action_smart_reorder_cron_log"
               sequence="9"/>
 
+    <!-- Mark as Ordered Reconciliation (Recommendation) -->
+    <menuitem id="menu_smart_reorder_mark_ordered_log"
+              name="Mark-Ordered Reconciliation"
+              parent="menu_smart_reorder_root"
+              action="action_smart_reorder_mark_ordered_log"
+              sequence="11"/>
+
     <!-- Forecast Back-testing -->
     <menuitem id="menu_smart_reorder_forecast_snapshot"
               name="Forecast Back-testing"
@@ -76,6 +100,13 @@
               action="action_smart_reorder_observability_dashboard"
               sequence="10"
               groups="smart_reorder_advisor.group_smart_reorder_manager"/>
+
+    <!-- Data Quality / Setup Health (Recommendation) -->
+    <menuitem id="menu_smart_reorder_data_health_dashboard"
+              name="Data Quality / Setup Health"
+              parent="menu_smart_reorder_root"
+              action="action_smart_reorder_data_health_dashboard"
+              sequence="12"/>
 
     <!-- Config -->
     <menuitem id="menu_smart_reorder_config"

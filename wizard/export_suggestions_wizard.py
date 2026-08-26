@@ -68,6 +68,10 @@ EXPORT_HEADERS = [
     'Transfer Qty',
     'Transfer Lead Time (Days)',
     'Draft PO Ref',
+    'Last Purchase Cost',
+    'Effective Unit Cost',
+    'Price Discrepancy?',
+    'Price Discrepancy (%)',
 ]
 
 # Task 9: "Essential (Working List)" — the small column set a buyer actually
@@ -192,9 +196,21 @@ class ExportSuggestionsWizard(models.TransientModel):
         wb.save(buffer)
         return buffer.getvalue()
 
+    def _user_can_see_cost(self):
+        """Recommendation: field-level `groups=` on the model already blocks
+        cost data in list/form views; this makes the export respect the same
+        boundary explicitly and predictably, rather than relying on ORM
+        edge-case behavior for programmatic field access."""
+        return (
+            self.env.user.has_group('smart_reorder_advisor.group_smart_reorder_cost_viewer')
+            or self.env.user.has_group('smart_reorder_advisor.group_smart_reorder_manager')
+        )
+
     @api.model
     def _build_essential_xlsx(self, suggestions):
         wb, ws = self._new_workbook('Reorder Suggestions (Essential)', ESSENTIAL_HEADERS)
+        can_see_cost = self._user_can_see_cost()
+        redacted = '— (no access)'
 
         for row, rec in enumerate(suggestions, start=2):
             ws.cell(row=row, column=1, value=rec.product_id.name or '')
@@ -202,8 +218,8 @@ class ExportSuggestionsWizard(models.TransientModel):
             ws.cell(row=row, column=3, value=rec.qty_on_hand)
             ws.cell(row=row, column=4, value=rec.suggested_reorder_qty)
             ws.cell(row=row, column=5, value=rec.vendor_id.name or '')
-            ws.cell(row=row, column=6, value=rec.product_cost)
-            ws.cell(row=row, column=7, value=rec.reorder_value)
+            ws.cell(row=row, column=6, value=rec.product_cost if can_see_cost else redacted)
+            ws.cell(row=row, column=7, value=rec.reorder_value if can_see_cost else redacted)
             ws.cell(row=row, column=8, value='Yes' if rec.is_dead_stock else 'No')
             ws.cell(row=row, column=9, value=rec.last_sale_date or None)
 
@@ -212,6 +228,8 @@ class ExportSuggestionsWizard(models.TransientModel):
     @api.model
     def _build_full_xlsx(self, suggestions):
         wb, ws = self._new_workbook('Reorder Suggestions', EXPORT_HEADERS)
+        can_see_cost = self._user_can_see_cost()
+        redacted = '— (no access)'
 
         for row, rec in enumerate(suggestions, start=2):
             ws.cell(row=row, column=1,  value=rec.budget_rank)
@@ -245,8 +263,8 @@ class ExportSuggestionsWizard(models.TransientModel):
             ws.cell(row=row, column=29, value=rec.prior_suggested_qty)
             ws.cell(row=row, column=30, value=rec.delta_pct)
             ws.cell(row=row, column=31, value=rec.confidence)
-            ws.cell(row=row, column=32, value=rec.product_cost)
-            ws.cell(row=row, column=33, value=rec.reorder_value)
+            ws.cell(row=row, column=32, value=rec.product_cost if can_see_cost else redacted)
+            ws.cell(row=row, column=33, value=rec.reorder_value if can_see_cost else redacted)
             ws.cell(row=row, column=34, value='Yes' if rec.is_dead_stock else 'No')
             ws.cell(row=row, column=35, value=rec.months_since_last_sale)
             ws.cell(row=row, column=36, value='Yes' if rec.within_budget else 'No')
@@ -256,5 +274,9 @@ class ExportSuggestionsWizard(models.TransientModel):
             ws.cell(row=row, column=40, value=rec.transfer_suggested_qty)
             ws.cell(row=row, column=41, value=rec.transfer_lead_time_days)
             ws.cell(row=row, column=42, value=rec.draft_po_ref or '')
+            ws.cell(row=row, column=43, value=rec.last_purchase_cost if can_see_cost else redacted)
+            ws.cell(row=row, column=44, value=rec.effective_unit_cost if can_see_cost else redacted)
+            ws.cell(row=row, column=45, value=('Yes' if rec.has_price_discrepancy else 'No') if can_see_cost else redacted)
+            ws.cell(row=row, column=46, value=rec.price_discrepancy_pct if can_see_cost else redacted)
 
         return self._finalize_sheet(wb, ws, EXPORT_HEADERS)

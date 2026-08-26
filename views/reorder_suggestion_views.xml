@@ -118,6 +118,8 @@
 
                 <field name="stale_reason"     string="Stale Reason" optional="hide"/>
                 <field name="needs_review_reason" string="Review Reason" optional="hide"/>
+                <field name="needs_vendor_assignment" string="👤 Needs Vendor?" optional="hide"/>
+                <field name="dead_stock_critical_review" string="☠️ Dead+Critical?" optional="hide"/>
 
                 <field name="reorder_needed"   column_invisible="True"/>
                 <field name="urgency_rank"     column_invisible="True"/>
@@ -348,7 +350,8 @@
                                 <field name="delta_pct" readonly="1" nolabel="1" class="d-inline-block fw-bold"/>
                                 <span>%</span>
                             </div>
-                            <div style="margin:8px 0 0 0; font-size:1.1rem; color:#2c3e50; display: flex; justify-content: center; align-items: center; flex-wrap: wrap; gap: 12px;">
+                            <div style="margin:8px 0 0 0; font-size:1.1rem; color:#2c3e50; display: flex; justify-content: center; align-items: center; flex-wrap: wrap; gap: 12px;"
+                                 groups="smart_reorder_advisor.group_smart_reorder_cost_viewer,smart_reorder_advisor.group_smart_reorder_manager">
                                 <div>
                                     <span>💰 Est. Cost (cost basis):</span>
                                     <field name="reorder_value" readonly="1" nolabel="1"
@@ -450,7 +453,8 @@
                             </group>
                         </page>
 
-                        <page string="💰 Cost Detail">
+                        <page string="💰 Cost Detail"
+                              groups="smart_reorder_advisor.group_smart_reorder_cost_viewer,smart_reorder_advisor.group_smart_reorder_manager">
                             <div class="alert alert-warning" role="alert"
                                  invisible="not has_price_discrepancy">
                                 ⚠️ <strong>PRICE DISCREPANCY.</strong>
@@ -643,6 +647,10 @@
                         domain="[('needs_review','=',True)]"/>
                 <filter name="draft_po_stale"  string="⏳ Stale Draft PO"
                         domain="[('is_draft_po_stale','=',True)]"/>
+                <filter name="needs_vendor_assignment" string="👤 Needs Vendor Assignment"
+                        domain="[('needs_vendor_assignment','=',True)]"/>
+                <filter name="dead_stock_critical_review" string="☠️ Dead Stock + Critical"
+                        domain="[('dead_stock_critical_review','=',True)]"/>
 
                 <separator/>
 
@@ -701,6 +709,62 @@
         </field>
     </record>
 
+    <!-- ── Action Center (Recommendation) ──
+         All six triage flags (Needs Review, Stale Data, Stale Draft PO, Needs
+         Vendor Assignment, Dead Stock + Critical, Price Discrepancy) in one
+         ranked list, instead of six separate menu items someone has to
+         remember to check individually. Ranked by urgency first, then by how
+         many flags are stacked on one item. -->
+    <record id="view_smart_reorder_action_center_list" model="ir.ui.view">
+        <field name="name">smart.reorder.suggestion.action.center.tree</field>
+        <field name="model">smart.reorder.suggestion</field>
+        <field name="arch" type="xml">
+            <tree string="Action Center"
+                  default_order="urgency_rank asc, attention_flag_count desc"
+                  create="false" edit="false" delete="false"
+                  decoration-danger="urgency == 'critical'"
+                  decoration-warning="urgency == 'urgent'">
+                <field name="urgency" widget="badge"
+                       decoration-danger="urgency == 'critical'"
+                       decoration-warning="urgency == 'urgent'"
+                       decoration-info="urgency == 'normal'"
+                       decoration-success="urgency == 'ok'"
+                       decoration-muted="urgency == 'dead'"/>
+                <field name="attention_flag_count" string="#" widget="integer"/>
+                <field name="attention_reasons" string="Why Flagged"/>
+                <field name="warehouse_id"/>
+                <field name="default_code" string="Part No."/>
+                <field name="product_id"/>
+                <field name="qty_on_hand" string="On Hand"
+                       decoration-danger="qty_on_hand &lt; 0"/>
+                <field name="suggested_reorder_qty" string="Suggest Reorder"
+                       decoration-bf="reorder_needed == True"/>
+                <field name="vendor_id"/>
+                <field name="reorder_value" widget="monetary"
+                       options="{'currency_field': 'currency_id'}"/>
+                <field name="currency_id" column_invisible="True"/>
+                <field name="urgency_rank" column_invisible="True"/>
+                <field name="reorder_needed" column_invisible="True"/>
+            </tree>
+        </field>
+    </record>
+
+    <record id="action_smart_reorder_action_center" model="ir.actions.act_window">
+        <field name="name">🧭 Action Center</field>
+        <field name="res_model">smart.reorder.suggestion</field>
+        <field name="view_mode">tree,form</field>
+        <field name="domain">[('attention_flag_count','&gt;',0)]</field>
+        <field name="search_view_id" ref="view_smart_reorder_suggestion_search"/>
+        <field name="view_ids" eval="[(5, 0, 0),
+            (0, 0, {'view_mode': 'tree', 'view_id': ref('view_smart_reorder_action_center_list')}),
+            (0, 0, {'view_mode': 'form', 'view_id': ref('view_smart_reorder_suggestion_form')})]"/>
+        <field name="help">
+            Everything currently flagged for attention, in one list — ranked
+            by urgency first, then by how many separate things are flagged on
+            it. An empty list means nothing needs a human look right now.
+        </field>
+    </record>
+
     <record id="action_smart_reorder_suggestions" model="ir.actions.act_window">
         <field name="name">Reorder Suggestions</field>
         <field name="res_model">smart.reorder.suggestion</field>
@@ -747,6 +811,35 @@
         <field name="domain">[('within_budget','=',True),('reorder_needed','=',True)]</field>
         <field name="context">{'search_default_within_budget': 1}</field>
         <field name="search_view_id" ref="view_smart_reorder_suggestion_search"/>
+    </record>
+
+    <!-- ── Data Cleanup Triage (Recommendation) ── -->
+    <record id="action_smart_reorder_needs_vendor_assignment" model="ir.actions.act_window">
+        <field name="name">👤 Needs Vendor Assignment</field>
+        <field name="res_model">smart.reorder.suggestion</field>
+        <field name="view_mode">tree,form</field>
+        <field name="domain">[('needs_vendor_assignment','=',True)]</field>
+        <field name="search_view_id" ref="view_smart_reorder_suggestion_search"/>
+        <field name="help">
+            Suggestions that need reordering but have no vendor, or only a
+            Temporary/Placeholder Vendor. Select rows and use
+            "Bulk Assign Vendor" from the Action (⚙) menu to fix several at once.
+        </field>
+    </record>
+
+    <record id="action_smart_reorder_dead_stock_critical_review" model="ir.actions.act_window">
+        <field name="name">☠️ Dead Stock + Critical — Needs Review</field>
+        <field name="res_model">smart.reorder.suggestion</field>
+        <field name="view_mode">tree,form</field>
+        <field name="domain">[('dead_stock_critical_review','=',True)]</field>
+        <field name="search_view_id" ref="view_smart_reorder_suggestion_search"/>
+        <field name="help">
+            Flagged Dead Stock AND showing Critical urgency at the same time —
+            negative/promised stock is forcing a positive reorder qty on
+            something that hasn't sold in months. Needs a human look before
+            trusting the number: a real stock correction, a genuine reorder,
+            or Snooze once resolved.
+        </field>
     </record>
 
     <!-- ── Bulk Snooze Server Actions (T-33) ──

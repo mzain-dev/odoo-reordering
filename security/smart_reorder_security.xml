@@ -3,12 +3,21 @@
     <data>
 
         <!--
-        ╔══════════════════════════════════════════════════════════════╗
-        ║  SMART REORDER ADVISOR — SECURITY GROUPS                    ║
-        ║                                                              ║
-        ║  User:    Can VIEW suggestions and run reports (read-only)   ║
-        ║  Manager: Can run analysis, configure settings, send alerts  ║
-        ╚══════════════════════════════════════════════════════════════╝
+        ╔══════════════════════════════════════════════════════════════════╗
+        ║  SMART REORDER ADVISOR — SECURITY GROUPS                        ║
+        ║                                                                  ║
+        ║  User:        Can VIEW suggestions and reports (read-only)       ║
+        ║  Cost Viewer: Adds visibility into vendor cost/pricing fields    ║
+        ║               (Unit Cost, Vendor Price, Last Purchase Cost,      ║
+        ║               Effective Unit Cost, Price Discrepancy, Reorder    ║
+        ║               Value) — a separate axis from User/Manager, so an  ║
+        ║               admin can grant it to a specific buyer without     ║
+        ║               also making them a Manager.                       ║
+        ║  Manager:     Can run analysis, configure settings, send alerts  ║
+        ║               — always includes Cost Viewer (a manager already  ║
+        ║               has full write access, restricting cost data      ║
+        ║               from them would just break their own workflow).   ║
+        ╚══════════════════════════════════════════════════════════════════╝
         -->
 
         <!-- Module category -->
@@ -24,11 +33,21 @@
             <field name="implied_ids" eval="[(4, ref('base.group_user'))]"/>
         </record>
 
+        <!-- Cost Viewer: optional add-on to User, gates the cost/pricing fields
+             declared with groups=... on smart.reorder.suggestion. Requires
+             User (a Cost Viewer must already be able to see suggestions at
+             all) but is otherwise independent of Manager. -->
+        <record id="group_smart_reorder_cost_viewer" model="res.groups">
+            <field name="name">Cost Viewer</field>
+            <field name="category_id" ref="module_category_smart_reorder"/>
+            <field name="implied_ids" eval="[(4, ref('group_smart_reorder_user'))]"/>
+        </record>
+
         <!-- Manager group: full access including config and running analysis -->
         <record id="group_smart_reorder_manager" model="res.groups">
             <field name="name">Manager</field>
             <field name="category_id" ref="module_category_smart_reorder"/>
-            <field name="implied_ids" eval="[(4, ref('group_smart_reorder_user'))]"/>
+            <field name="implied_ids" eval="[(4, ref('group_smart_reorder_user')), (4, ref('group_smart_reorder_cost_viewer'))]"/>
             <field name="users" eval="[(4, ref('base.user_root')), (4, ref('base.user_admin'))]"/>
         </record>
 
@@ -68,6 +87,12 @@
         <record id="rule_forecast_snapshot_company" model="ir.rule">
             <field name="name">Smart Reorder Forecast Snapshot: Company isolation</field>
             <field name="model_id" ref="model_smart_reorder_forecast_snapshot"/>
+            <field name="domain_force">[('company_id', 'in', company_ids)]</field>
+        </record>
+
+        <record id="rule_mark_ordered_log_company" model="ir.rule">
+            <field name="name">Smart Reorder Mark Ordered Log: Company isolation</field>
+            <field name="model_id" ref="model_smart_reorder_mark_ordered_log"/>
             <field name="domain_force">[('company_id', 'in', company_ids)]</field>
         </record>
 

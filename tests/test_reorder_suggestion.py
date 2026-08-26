@@ -207,6 +207,47 @@ class TestReorderCalculations(TransactionCase):
         self.assertEqual(direction, 'high')
         self.assertEqual(flags, [False, False, False, True, False])
 
+    def test_robust_demand_spike_multiplier_is_configurable(self):
+        # March=400, July=1550 (most-recent-first: [1550, 0, 0, 0, 400, 0]).
+        # At the default 4x multiplier, 1550 is NOT >= 4*400=1600, so it's kept
+        # in the average — a real conversation example (325/month forecast).
+        forecast, excluded, direction, flags = self.Suggestion._compute_robust_monthly_demand(
+            [1550.0, 0.0, 0.0, 0.0, 400.0, 0.0]
+        )
+        self.assertEqual(forecast, 325.0)
+        self.assertEqual(excluded, 0)
+
+        # Lowering the multiplier to 3x: 1550 >= 3*400=1200 now passes, so July
+        # gets excluded and the forecast drops to the average of the other 5
+        # months (400/5 = 80/month) — proving the threshold is wired through.
+        forecast, excluded, direction, flags = self.Suggestion._compute_robust_monthly_demand(
+            [1550.0, 0.0, 0.0, 0.0, 400.0, 0.0], spike_multiplier=3.0
+        )
+        self.assertEqual(forecast, 80.0)
+        self.assertEqual(excluded, 1)
+        self.assertEqual(direction, 'high')
+        self.assertEqual(flags, [True, False, False, False, False, False])
+
+    def test_robust_demand_spike_dominance_pct_is_configurable(self):
+        # Five months of 7 units plus one month of 30. The 30 clears the
+        # multiplier test (30 >= 4*7=28) but NOT the default 50% dominance
+        # test (30 < 0.5*65=32.5) — so by default it's kept in the average.
+        forecast, excluded, direction, flags = self.Suggestion._compute_robust_monthly_demand(
+            [7.0, 7.0, 7.0, 7.0, 7.0, 30.0]
+        )
+        self.assertAlmostEqual(forecast, 65.0 / 6)
+        self.assertEqual(excluded, 0)
+
+        # Lowering dominance to 40%: 30 >= 0.4*65=26 now passes, so the 30 is
+        # excluded and the forecast becomes the plain average of the five 7s.
+        forecast, excluded, direction, flags = self.Suggestion._compute_robust_monthly_demand(
+            [7.0, 7.0, 7.0, 7.0, 7.0, 30.0], spike_dominance_pct=40.0
+        )
+        self.assertEqual(forecast, 7.0)
+        self.assertEqual(excluded, 1)
+        self.assertEqual(direction, 'high')
+        self.assertEqual(flags, [False, False, False, False, False, True])
+
     def test_robust_demand_zero_mad_no_bulk_order(self):
         # [0, 0, 0, 5, 5] has median 0.0 and MAD 0.0.
         # Zero count is 3 (>= 2.5), but max month (5.0) is only 5.0 / 10.0 = 50% (< 75%) of total sales.
@@ -703,6 +744,143 @@ class TestGenerateSuggestionsWizard(TransactionCase):
         wizard = self.env['smart.reorder.wizard'].create({'scope': 'all'})
         result = wizard.action_generate()
         self.assertEqual(result.get('res_model'), 'smart.reorder.suggestion')
+
+
+@tagged('post_install', '-at_install')
+class TestCronLogRetention(TransactionCase):
+    """Recommendation: Run History had no retention, unlike forecast
+    snapshots — it would grow one row per company per run forever. Mirrors
+    ForecastSnapshot's retention purge; never touches a 'running' row."""
+
+    def setUp(self):
+        super().setUp()
+        self.company = self.env.company
+        self.CronLog = self.env['smart.reorder.cron.log']
+        self.config = self.env['smart.reorder.config'].search(
+            [('company_id', '=', self.company.id)], limit=1
+        )
+        if not self.config:
+            self.config = self.env['smart.reorder.config'].create({'company_id': self.company.id})
+
+    def _make_log(self, days_old, status='completed'):
+        return self.CronLog.create({
+            'company_id': self.company.id,
+            'started_at': fields.Datetime.now() - timedelta(days=days_old),
+            'trigger_type': 'cron',
+            'status': status,
+        })
+
+    def test_purges_logs_older_than_retention(self):
+        self.config.write({'cron_log_retention_months': 6})
+        old_log = self._make_log(400)      # ~13 months
+        recent_log = self._make_log(30)
+        self.CronLog._purge_old_logs()
+        self.assertFalse(old_log.exists())
+        self.assertTrue(recent_log.exists())
+
+    def test_never_purges_running_log_even_if_old(self):
+        self.config.write({'cron_log_retention_months': 1})
+        stuck_log = self._make_log(400, status='running')
+        self.CronLog._purge_old_logs()
+        self.assertTrue(stuck_log.exists(), 'a running log must never be purged, regardless of age')
+
+    def test_retention_zero_disables_purge(self):
+        self.config.write({'cron_log_retention_months': 0})
+        old_log = self._make_log(1000)
+        self.CronLog._purge_old_logs()
+        self.assertTrue(old_log.exists())
+
+    def test_weekly_cron_calls_purge(self):
+        self.config.write({'cron_log_retention_months': 1})
+        old_log = self._make_log(400)
+        self.env['smart.reorder.suggestion'].action_run_weekly_cron()
+        self.assertFalse(old_log.exists(), 'the weekly cron entry point must trigger the purge')
+
+
+@tagged('post_install', '-at_install')
+class TestCronOverdueDetection(TransactionCase):
+    """Recommendation: missed-run detection — both the passive dashboard
+    field and the active daily heartbeat notification, so a stuck worker or
+    an accidentally-disabled cron doesn't go silently unnoticed."""
+
+    def setUp(self):
+        super().setUp()
+        self.company = self.env.company
+        self.config = self.env['smart.reorder.config'].search(
+            [('company_id', '=', self.company.id)], limit=1
+        )
+        if not self.config:
+            self.config = self.env['smart.reorder.config'].create({'company_id': self.company.id})
+        self.config.write({'cron_frequency': 'weekly', 'overdue_alert_sent': False})
+        self.cron = self.env.ref('smart_reorder_advisor.cron_smart_reorder_weekly')
+        self.cron.write({'active': True})
+        self.CronLog = self.env['smart.reorder.cron.log']
+        self.user = self.env['res.users'].create({
+            'name': 'Overdue Alert Recipient',
+            'login': 'overdue_alert_recipient_test',
+            'email': 'overdue_alert_recipient_test@example.com',
+            'groups_id': [(6, 0, [self.env.ref('base.group_user').id])],
+        })
+        self.config.write({'notify_user_ids': [(6, 0, [self.user.id])]})
+
+    def _make_log(self, days_old, status='completed'):
+        return self.CronLog.create({
+            'company_id': self.company.id,
+            'started_at': fields.Datetime.now() - timedelta(days=days_old),
+            'finished_at': fields.Datetime.now() - timedelta(days=days_old),
+            'trigger_type': 'cron',
+            'status': status,
+        })
+
+    def test_dashboard_not_overdue_with_recent_run(self):
+        self._make_log(1)
+        dashboard = self.env['smart.reorder.observability.dashboard'].create({'company_id': self.company.id})
+        self.assertFalse(dashboard.is_run_overdue)
+
+    def test_dashboard_overdue_with_old_run(self):
+        self._make_log(30)  # well past weekly (7d) * 1.5 grace
+        dashboard = self.env['smart.reorder.observability.dashboard'].create({'company_id': self.company.id})
+        self.assertTrue(dashboard.is_run_overdue)
+        self.assertEqual(dashboard.expected_interval_days, 7)
+
+    def test_dashboard_not_overdue_when_cron_disabled(self):
+        self._make_log(30)
+        self.cron.write({'active': False})
+        dashboard = self.env['smart.reorder.observability.dashboard'].create({'company_id': self.company.id})
+        self.assertFalse(dashboard.is_run_overdue, 'a deliberately disabled cron is not "overdue"')
+
+    def test_heartbeat_sends_once_and_dedupes(self):
+        self._make_log(30)
+        count_before = self.env['mail.message'].search_count([('subject', 'ilike', 'overdue')])
+
+        self.env['smart.reorder.config']._check_overdue_runs()
+        self.config.invalidate_recordset()
+        self.assertTrue(self.config.overdue_alert_sent)
+        count_after_first = self.env['mail.message'].search_count([('subject', 'ilike', 'overdue')])
+        self.assertGreater(count_after_first, count_before)
+
+        # Second call must NOT send again.
+        self.env['smart.reorder.config']._check_overdue_runs()
+        count_after_second = self.env['mail.message'].search_count([('subject', 'ilike', 'overdue')])
+        self.assertEqual(count_after_second, count_after_first, 'must not resend once already flagged')
+
+    def test_heartbeat_clears_flag_once_resolved(self):
+        self._make_log(30)
+        self.env['smart.reorder.config']._check_overdue_runs()
+        self.config.invalidate_recordset()
+        self.assertTrue(self.config.overdue_alert_sent)
+
+        self._make_log(0)  # a fresh successful run resolves it
+        self.env['smart.reorder.config']._check_overdue_runs()
+        self.config.invalidate_recordset()
+        self.assertFalse(self.config.overdue_alert_sent)
+
+    def test_heartbeat_noop_when_main_cron_disabled(self):
+        self._make_log(30)
+        self.cron.write({'active': False})
+        self.env['smart.reorder.config']._check_overdue_runs()
+        self.config.invalidate_recordset()
+        self.assertFalse(self.config.overdue_alert_sent)
 
 
 @tagged('post_install', '-at_install')
@@ -1268,6 +1446,55 @@ class TestRobustDemandForecast(TransactionCase):
         self.assertAlmostEqual(suggestion.avg_monthly_demand, 0.4)
         self.assertEqual(suggestion.sales_pattern, 'big_order_mixed')
         self.assertEqual(suggestion.suggested_reorder_qty, 2.0)
+
+    def test_spike_multiplier_config_flows_through_generate_suggestions(self):
+        # Same March(400)/July(1550) pattern discussed with the user — proves
+        # the new spike_multiplier config field actually reaches the real
+        # calculation pipeline (config -> config_data -> engine), not just
+        # the pure function tested in TestReorderCalculations.
+        prod = self.env['product.product'].create({
+            'name': 'Test Spike Multiplier Config Widget', 'type': 'product', 'standard_price': 1.0,
+        })
+        self.config.write({
+            'safety_buffer_months': 1.0,
+            'default_lead_time_months': 1.5,
+            'order_cycle_months': 1.0,
+        })
+        qtys = [1550.0, 0.0, 0.0, 0.0, 400.0, 0.0]
+        for month_start, qty in zip(self.month_starts, qtys):
+            if qty > 0.0:
+                order_date = datetime.combine(month_start + timedelta(days=4), datetime.min.time())
+                order = self.env['sale.order'].create({
+                    'partner_id': self.partner.id,
+                    'company_id': self.company.id,
+                    'warehouse_id': self.warehouse.id,
+                    'date_order': order_date,
+                    'order_line': [(0, 0, {
+                        'product_id': prod.id,
+                        'product_uom_qty': qty,
+                        'price_unit': 10.0,
+                    })],
+                })
+                order.action_confirm()
+                order.order_line.qty_delivered = qty
+
+        # Default multiplier (4.0x): July is kept in the average -> 325/month.
+        self.Suggestion.generate_suggestions(
+            company_ids=[self.company.id], warehouse_ids=[self.warehouse.id]
+        )
+        suggestion = self.Suggestion.search([
+            ('product_id', '=', prod.id), ('warehouse_id', '=', self.warehouse.id),
+        ])
+        self.assertEqual(len(suggestion), 1)
+        self.assertAlmostEqual(suggestion.avg_monthly_demand, 325.0)
+
+        # Lower to 3.0x and re-run -> July now excluded as a spike -> 80/month.
+        self.config.write({'spike_multiplier': 3.0})
+        self.Suggestion.generate_suggestions(
+            company_ids=[self.company.id], warehouse_ids=[self.warehouse.id]
+        )
+        suggestion.invalidate_recordset()
+        self.assertAlmostEqual(suggestion.avg_monthly_demand, 80.0)
 
     def test_regression_series_2_one_time_sale(self):
         # 0, 2000, 0, 0, 0, 0 -> forecast 0, suggestion 0, flagged for review (one_time_big_order)
@@ -2716,17 +2943,43 @@ class TestExportSuggestionsWizard(TransactionCase):
         wb = load_workbook(io.BytesIO(base64.b64decode(attachment.datas)))
         ws = wb.active
         header_row = [cell.value for cell in next(ws.iter_rows(min_row=1, max_row=1))]
-        self.assertEqual(len(header_row), 42, 'Full format must keep every existing column')
+        self.assertEqual(len(header_row), 46, 'Full format must keep every existing column plus the 4 new cost columns')
         self.assertEqual(header_row[0], 'Budget Rank')
         self.assertEqual(header_row[3], 'Urgency')
         self.assertEqual(header_row[10], 'Part Number')
         self.assertEqual(header_row[37], 'Vendor')
+        self.assertEqual(header_row[42], 'Last Purchase Cost')
+        self.assertEqual(header_row[43], 'Effective Unit Cost')
+        self.assertEqual(header_row[44], 'Price Discrepancy?')
+        self.assertEqual(header_row[45], 'Price Discrepancy (%)')
         self.assertEqual(ws.max_row, 3, 'header + 2 data rows')
 
         data_rows = list(ws.iter_rows(min_row=2, max_row=3, values_only=True))
         row_a = next(row for row in data_rows if row[10] == 'EXP-A')
         self.assertEqual(row_a[3], 'Critical — Negative Stock')
         self.assertEqual(row_a[37], 'Test Export Vendor')
+
+    def test_export_full_includes_cost_columns(self):
+        self.sugg_a.write({
+            'last_purchase_cost': 8.5,
+            'effective_unit_cost': 8.5,
+            'has_price_discrepancy': True,
+            'price_discrepancy_pct': 25.0,
+        })
+        wizard = self.Wizard.with_context(
+            active_domain=[('id', '=', self.sugg_a.id)]
+        ).create({'export_format': 'full'})
+        action = wizard.action_export()
+        attachment_id = int(action['url'].split('/web/content/')[1].split('?')[0])
+        attachment = self.env['ir.attachment'].browse(attachment_id)
+
+        wb = load_workbook(io.BytesIO(base64.b64decode(attachment.datas)))
+        ws = wb.active
+        data_row = next(ws.iter_rows(min_row=2, max_row=2, values_only=True))
+        self.assertEqual(data_row[42], 8.5)
+        self.assertEqual(data_row[43], 8.5)
+        self.assertEqual(data_row[44], 'Yes')
+        self.assertEqual(data_row[45], 25.0)
 
     def test_export_with_no_matching_records_raises(self):
         wizard = self.Wizard.with_context(active_domain=[('id', '=', -1)]).create({})
@@ -3160,6 +3413,91 @@ class TestMarkAsOrdered(TransactionCase):
         )
         suggestion.invalidate_recordset()
         self.assertTrue(suggestion.reorder_needed, 'a still-unresolved shortage must resurface after the one suppressed cycle')
+
+    def test_mark_ordered_creates_pending_log_entry(self):
+        product = self.env['product.product'].create({
+            'name': 'Mark Ordered Log Widget', 'type': 'product', 'standard_price': 1.0,
+        })
+        suggestion = self.Suggestion.create({
+            'company_id': self.company.id, 'warehouse_id': self.warehouse.id,
+            'product_id': product.id, 'urgency': 'urgent',
+            'suggested_reorder_qty': 7.0, 'reorder_needed': True,
+        })
+        suggestion.action_mark_ordered()
+        log = self.env['smart.reorder.mark.ordered.log'].search([
+            ('suggestion_id', '=', suggestion.id),
+        ])
+        self.assertEqual(len(log), 1)
+        self.assertEqual(log.outcome, 'pending')
+        self.assertEqual(log.suggested_qty_at_mark, 7.0)
+        self.assertEqual(log.marked_by_id, self.env.user)
+        self.assertEqual(log.product_id, product)
+        self.assertFalse(log.resolved_at)
+
+    def test_bulk_mark_ordered_creates_one_log_entry_per_record(self):
+        products = [
+            self.env['product.product'].create({
+                'name': f'Bulk Mark Ordered Log Widget {i}', 'type': 'product', 'standard_price': 1.0,
+            }) for i in range(2)
+        ]
+        suggestions = self.Suggestion.create([{
+            'company_id': self.company.id, 'warehouse_id': self.warehouse.id,
+            'product_id': p.id, 'urgency': 'urgent',
+            'suggested_reorder_qty': 3.0, 'reorder_needed': True,
+        } for p in products])
+        suggestions.action_bulk_mark_ordered()
+        logs = self.env['smart.reorder.mark.ordered.log'].search([
+            ('suggestion_id', 'in', suggestions.ids),
+        ])
+        self.assertEqual(len(logs), 2)
+        self.assertTrue(all(l.outcome == 'pending' for l in logs))
+
+    def test_reconciliation_log_resolves_as_resurfaced_when_still_needed(self):
+        product = self.env['product.product'].create({
+            'name': 'Mark Ordered Log Resurface Widget', 'type': 'product', 'standard_price': 1.0,
+        })
+        self._set_quant(product, -4.0)
+        self.Suggestion.generate_suggestions(
+            company_ids=[self.company.id], warehouse_ids=[self.warehouse.id]
+        )
+        suggestion = self.Suggestion.search([
+            ('product_id', '=', product.id), ('warehouse_id', '=', self.warehouse.id),
+        ])
+        suggestion.action_mark_ordered()
+
+        # Stock still hasn't arrived — the underlying shortage is unchanged.
+        self.Suggestion.generate_suggestions(
+            company_ids=[self.company.id], warehouse_ids=[self.warehouse.id]
+        )
+        log = self.env['smart.reorder.mark.ordered.log'].search([
+            ('suggestion_id', '=', suggestion.id),
+        ])
+        self.assertEqual(log.outcome, 'resurfaced')
+        self.assertTrue(log.resolved_at)
+
+    def test_reconciliation_log_resolves_as_cleared_when_resolved(self):
+        product = self.env['product.product'].create({
+            'name': 'Mark Ordered Log Cleared Widget', 'type': 'product', 'standard_price': 1.0,
+        })
+        self._set_quant(product, -4.0)
+        self.Suggestion.generate_suggestions(
+            company_ids=[self.company.id], warehouse_ids=[self.warehouse.id]
+        )
+        suggestion = self.Suggestion.search([
+            ('product_id', '=', product.id), ('warehouse_id', '=', self.warehouse.id),
+        ])
+        suggestion.action_mark_ordered()
+
+        # The stock actually arrived and got logged before the next run.
+        self._set_quant(product, 4.0)
+        self.Suggestion.generate_suggestions(
+            company_ids=[self.company.id], warehouse_ids=[self.warehouse.id]
+        )
+        log = self.env['smart.reorder.mark.ordered.log'].search([
+            ('suggestion_id', '=', suggestion.id),
+        ])
+        self.assertEqual(log.outcome, 'cleared')
+        self.assertTrue(log.resolved_at)
 
 
 @tagged('post_install', '-at_install')
@@ -3941,6 +4279,243 @@ class TestBossWeeklyOrderReport(TransactionCase):
         # to Needs Attention, not summed into any vendor subtotal or the total.
         self.assertIn('GRAND TOTAL', html)
         self.assertIn('50.00', html)
+
+
+@tagged('post_install', '-at_install')
+class TestDataCleanupTriageFlags(TransactionCase):
+    """Recommendation: bulk triage tool — needs_vendor_assignment and
+    dead_stock_critical_review must correctly identify the two backlog
+    categories the boss report already routes away from the normal list,
+    and the vendor-assign wizard must durably fix the vendor (via
+    product.supplierinfo), not just cosmetically patch the suggestion."""
+
+    def setUp(self):
+        super().setUp()
+        self.company = self.env.company
+        self.warehouse = self.env['stock.warehouse'].search(
+            [('company_id', '=', self.company.id)], limit=1
+        )
+        if not self.warehouse:
+            self.warehouse = self.env['stock.warehouse'].create({
+                'name': 'Triage Test WH', 'code': 'TRWH', 'company_id': self.company.id,
+            })
+        self.config = self.env['smart.reorder.config'].search(
+            [('company_id', '=', self.company.id)], limit=1
+        )
+        if not self.config:
+            self.config = self.env['smart.reorder.config'].create({'company_id': self.company.id})
+
+    def _set_quant(self, product, qty_delta):
+        self.env['stock.quant']._update_available_quantity(
+            product, self.warehouse.lot_stock_id, qty_delta
+        )
+
+    def _generate(self):
+        self.env['smart.reorder.suggestion'].generate_suggestions(
+            company_ids=[self.company.id], warehouse_ids=[self.warehouse.id],
+            include_zero_demand=True, trigger_type='manual',
+        )
+
+    def test_needs_vendor_assignment_true_when_no_vendor(self):
+        product = self.env['product.product'].create({
+            'name': 'Triage No Vendor Widget', 'type': 'product', 'standard_price': 1.0,
+        })
+        self._set_quant(product, -3.0)
+        self._generate()
+        suggestion = self.env['smart.reorder.suggestion'].search([
+            ('product_id', '=', product.id), ('warehouse_id', '=', self.warehouse.id),
+        ])
+        self.assertTrue(suggestion)
+        self.assertTrue(suggestion.needs_vendor_assignment)
+
+    def test_needs_vendor_assignment_true_when_temp_vendor(self):
+        temp_vendor = self.env['res.partner'].create({'name': 'Triage Temp Vendor'})
+        self.config.write({'temp_vendor_ids': [(6, 0, [temp_vendor.id])]})
+        product = self.env['product.product'].create({
+            'name': 'Triage Temp Vendor Widget', 'type': 'product', 'standard_price': 1.0,
+        })
+        self.env['product.supplierinfo'].create({
+            'product_tmpl_id': product.product_tmpl_id.id,
+            'partner_id': temp_vendor.id,
+        })
+        self._set_quant(product, -3.0)
+        self._generate()
+        suggestion = self.env['smart.reorder.suggestion'].search([
+            ('product_id', '=', product.id), ('warehouse_id', '=', self.warehouse.id),
+        ])
+        self.assertTrue(suggestion)
+        self.assertTrue(suggestion.needs_vendor_assignment)
+
+    def test_needs_vendor_assignment_false_with_real_vendor(self):
+        real_vendor = self.env['res.partner'].create({'name': 'Triage Real Vendor'})
+        product = self.env['product.product'].create({
+            'name': 'Triage Real Vendor Widget', 'type': 'product', 'standard_price': 1.0,
+        })
+        self.env['product.supplierinfo'].create({
+            'product_tmpl_id': product.product_tmpl_id.id,
+            'partner_id': real_vendor.id,
+        })
+        self._set_quant(product, -3.0)
+        self._generate()
+        suggestion = self.env['smart.reorder.suggestion'].search([
+            ('product_id', '=', product.id), ('warehouse_id', '=', self.warehouse.id),
+        ])
+        self.assertTrue(suggestion)
+        self.assertFalse(suggestion.needs_vendor_assignment)
+
+    def test_dead_stock_critical_review_true(self):
+        product = self.env['product.product'].create({
+            'name': 'Triage Dead Critical Widget', 'type': 'product', 'standard_price': 1.0,
+        })
+        partner = self.env['res.partner'].create({'name': 'Triage Dead Critical Customer'})
+        old_date = fields.Date.today() - relativedelta(months=8)
+        order = self.env['sale.order'].create({
+            'partner_id': partner.id,
+            'company_id': self.company.id,
+            'warehouse_id': self.warehouse.id,
+            'date_order': datetime.combine(old_date, datetime.min.time()),
+            'order_line': [(0, 0, {
+                'product_id': product.id, 'product_uom_qty': 5.0, 'price_unit': 10.0,
+            })],
+        })
+        order.action_confirm()
+        order.order_line.qty_delivered = 5.0
+
+        self._set_quant(product, -3.0)  # negative now, no RECENT sales
+        self._generate()
+        suggestion = self.env['smart.reorder.suggestion'].search([
+            ('product_id', '=', product.id), ('warehouse_id', '=', self.warehouse.id),
+        ])
+        self.assertTrue(suggestion)
+        self.assertEqual(suggestion.urgency, 'critical')
+        self.assertTrue(suggestion.is_dead_stock)
+        self.assertTrue(suggestion.dead_stock_critical_review)
+
+    def test_dead_stock_critical_review_false_when_not_critical(self):
+        product = self.env['product.product'].create({
+            'name': 'Triage Not Critical Widget', 'type': 'product', 'standard_price': 1.0,
+        })
+        self._set_quant(product, 5.0)  # positive, dead, but not critical
+        self._generate()
+        suggestion = self.env['smart.reorder.suggestion'].search([
+            ('product_id', '=', product.id), ('warehouse_id', '=', self.warehouse.id),
+        ])
+        self.assertTrue(suggestion)
+        self.assertNotEqual(suggestion.urgency, 'critical')
+        self.assertFalse(suggestion.dead_stock_critical_review)
+
+    def test_vendor_assign_wizard_creates_supplierinfo_and_updates_suggestion(self):
+        product = self.env['product.product'].create({
+            'name': 'Triage Wizard Widget', 'type': 'product', 'standard_price': 1.0,
+        })
+        self._set_quant(product, -3.0)
+        self._generate()
+        suggestion = self.env['smart.reorder.suggestion'].search([
+            ('product_id', '=', product.id), ('warehouse_id', '=', self.warehouse.id),
+        ])
+        self.assertTrue(suggestion.needs_vendor_assignment)
+
+        new_vendor = self.env['res.partner'].create({'name': 'Newly Assigned Vendor'})
+        wizard = self.env['smart.reorder.vendor.assign.wizard'].with_context(
+            active_ids=[suggestion.id]
+        ).create({'vendor_id': new_vendor.id})
+        wizard.action_assign_vendor()
+
+        supplierinfo = self.env['product.supplierinfo'].search([
+            ('product_tmpl_id', '=', product.product_tmpl_id.id),
+            ('partner_id', '=', new_vendor.id),
+        ])
+        self.assertTrue(supplierinfo, 'must create a real product.supplierinfo, not just patch the suggestion')
+        suggestion.invalidate_recordset()
+        self.assertEqual(suggestion.vendor_id, new_vendor)
+        self.assertFalse(suggestion.needs_vendor_assignment)
+
+    def test_vendor_assign_wizard_requires_manager_group(self):
+        product = self.env['product.product'].create({
+            'name': 'Triage Wizard Guard Widget', 'type': 'product', 'standard_price': 1.0,
+        })
+        self._set_quant(product, -3.0)
+        self._generate()
+        suggestion = self.env['smart.reorder.suggestion'].search([
+            ('product_id', '=', product.id), ('warehouse_id', '=', self.warehouse.id),
+        ])
+        basic_user = self.env['res.users'].create({
+            'name': 'Triage Basic User',
+            'login': 'triage_basic_user_test',
+            'groups_id': [(6, 0, [
+                self.env.ref('base.group_user').id,
+                self.env.ref('smart_reorder_advisor.group_smart_reorder_user').id,
+            ])],
+        })
+        new_vendor = self.env['res.partner'].create({'name': 'Guard Test Vendor'})
+        with self.assertRaises(AccessError):
+            wizard = self.env['smart.reorder.vendor.assign.wizard'].with_user(basic_user).with_context(
+                active_ids=[suggestion.id]
+            ).create({'vendor_id': new_vendor.id})
+            wizard.action_assign_vendor()
+
+
+@tagged('post_install', '-at_install')
+class TestActionCenter(TransactionCase):
+    """Recommendation: attention_flag_count / attention_reasons must combine
+    all six triage flags reactively — correct the instant any flag changes,
+    not just after the next generate_suggestions() run."""
+
+    def setUp(self):
+        super().setUp()
+        self.company = self.env.company
+        self.warehouse = self.env['stock.warehouse'].search(
+            [('company_id', '=', self.company.id)], limit=1
+        )
+        if not self.warehouse:
+            self.warehouse = self.env['stock.warehouse'].create({
+                'name': 'Action Center Test WH', 'code': 'ACWH', 'company_id': self.company.id,
+            })
+
+    def _make_suggestion(self, **vals):
+        product = self.env['product.product'].create({
+            'name': f'Action Center Widget {vals.get("urgency", "x")} {len(vals)}',
+            'type': 'product', 'standard_price': 1.0,
+        })
+        base = {
+            'company_id': self.company.id, 'warehouse_id': self.warehouse.id,
+            'product_id': product.id, 'urgency': 'normal',
+        }
+        base.update(vals)
+        return self.env['smart.reorder.suggestion'].create(base)
+
+    def test_no_flags_gives_zero_count_and_no_reasons(self):
+        suggestion = self._make_suggestion()
+        self.assertEqual(suggestion.attention_flag_count, 0)
+        self.assertFalse(suggestion.attention_reasons)
+
+    def test_single_flag_counts_and_names_it(self):
+        suggestion = self._make_suggestion(needs_review=True, needs_review_reason='swing')
+        self.assertEqual(suggestion.attention_flag_count, 1)
+        self.assertEqual(suggestion.attention_reasons, 'Needs Review')
+
+    def test_multiple_flags_stack_and_all_are_named(self):
+        suggestion = self._make_suggestion(
+            needs_review=True, is_stale=True, has_price_discrepancy=True,
+        )
+        self.assertEqual(suggestion.attention_flag_count, 3)
+        self.assertIn('Needs Review', suggestion.attention_reasons)
+        self.assertIn('Stale Data', suggestion.attention_reasons)
+        self.assertIn('Price Discrepancy', suggestion.attention_reasons)
+
+    def test_recomputes_reactively_when_a_flag_is_cleared(self):
+        suggestion = self._make_suggestion(needs_review=True, is_stale=True)
+        self.assertEqual(suggestion.attention_flag_count, 2)
+        suggestion.write({'is_stale': False})
+        self.assertEqual(suggestion.attention_flag_count, 1)
+        self.assertEqual(suggestion.attention_reasons, 'Needs Review')
+
+    def test_action_center_domain_finds_only_flagged_suggestions(self):
+        flagged = self._make_suggestion(needs_review=True)
+        unflagged = self._make_suggestion()
+        results = self.env['smart.reorder.suggestion'].search([('attention_flag_count', '>', 0)])
+        self.assertIn(flagged, results)
+        self.assertNotIn(unflagged, results)
 
 
 class TestReorderPriceBreaksAltVendors(TransactionCase):
@@ -5055,6 +5630,189 @@ class TestReorderObservability(TransactionCase):
 
 
 @tagged('post_install', '-at_install')
+class TestDataHealthDashboard(TransactionCase):
+    """Recommendation: data-quality/setup health check — surfaces product
+    master-data gaps (no cost, no vendor, no part number, placeholder-only
+    vendor) that silently weaken forecasts without ever erroring."""
+
+    def setUp(self):
+        super().setUp()
+        self.company = self.env.company
+        self.config = self.env['smart.reorder.config'].search(
+            [('company_id', '=', self.company.id)], limit=1
+        )
+        if not self.config:
+            self.config = self.env['smart.reorder.config'].create({'company_id': self.company.id})
+
+    def test_counts_missing_cost_and_part_number(self):
+        self.env['product.product'].create({
+            'name': 'Health Missing Cost Widget', 'type': 'product',
+            'standard_price': 0.0, 'default_code': 'HLT-001',
+        })
+        self.env['product.product'].create({
+            'name': 'Health Missing Part Number Widget', 'type': 'product',
+            'standard_price': 5.0, 'default_code': False,
+        })
+        dashboard = self.env['smart.reorder.data.health.dashboard'].create({
+            'company_id': self.company.id,
+        })
+        self.assertGreaterEqual(dashboard.missing_cost_count, 1)
+        self.assertGreaterEqual(dashboard.missing_part_number_count, 1)
+
+    def test_counts_no_vendor_and_placeholder_only_vendor(self):
+        temp_vendor = self.env['res.partner'].create({'name': 'Health Temp Vendor'})
+        self.config.write({'temp_vendor_ids': [(6, 0, [temp_vendor.id])]})
+        real_vendor = self.env['res.partner'].create({'name': 'Health Real Vendor'})
+
+        no_vendor_product = self.env['product.product'].create({
+            'name': 'Health No Vendor Widget', 'type': 'product', 'standard_price': 5.0,
+        })
+        temp_vendor_product = self.env['product.product'].create({
+            'name': 'Health Temp Vendor Product', 'type': 'product', 'standard_price': 5.0,
+        })
+        self.env['product.supplierinfo'].create({
+            'product_tmpl_id': temp_vendor_product.product_tmpl_id.id,
+            'partner_id': temp_vendor.id,
+        })
+        real_vendor_product = self.env['product.product'].create({
+            'name': 'Health Real Vendor Product', 'type': 'product', 'standard_price': 5.0,
+        })
+        self.env['product.supplierinfo'].create({
+            'product_tmpl_id': real_vendor_product.product_tmpl_id.id,
+            'partner_id': real_vendor.id,
+        })
+
+        dashboard = self.env['smart.reorder.data.health.dashboard'].create({
+            'company_id': self.company.id,
+        })
+        self.assertGreaterEqual(dashboard.missing_vendor_count, 1)
+        self.assertGreaterEqual(dashboard.temp_vendor_only_count, 1)
+
+        action = dashboard.action_view_missing_vendor()
+        self.assertIn(no_vendor_product.product_tmpl_id.id, action['domain'][0][2])
+        self.assertNotIn(real_vendor_product.product_tmpl_id.id, action['domain'][0][2])
+
+    def test_excluded_products_not_counted(self):
+        excluded_product = self.env['product.product'].create({
+            'name': 'Health Excluded Widget', 'type': 'product',
+            'standard_price': 0.0, 'exclude_from_reorder_advisor': True,
+        })
+        dashboard = self.env['smart.reorder.data.health.dashboard'].create({
+            'company_id': self.company.id,
+        })
+        action = dashboard.action_view_missing_cost()
+        matches = self.env['product.template'].search(action['domain'])
+        self.assertNotIn(
+            excluded_product.product_tmpl_id, matches,
+            'a product explicitly excluded from the advisor must not appear as a data-quality gap'
+        )
+
+    def test_action_open_dashboard_creates_and_returns_record(self):
+        action = self.env['smart.reorder.data.health.dashboard'].action_open_dashboard()
+        self.assertEqual(action['res_model'], 'smart.reorder.data.health.dashboard')
+        self.assertTrue(action['res_id'])
+
+
+@tagged('post_install', '-at_install')
+class TestCostFieldVisibility(TransactionCase):
+    """Recommendation: cost/pricing fields must be gated behind a Cost Viewer
+    group (or Manager, which always implies it) — enforced at the ORM level
+    via fields_get(), not just hidden in a view, and the export must respect
+    the same boundary explicitly."""
+
+    COST_FIELDS = [
+        'product_cost', 'vendor_price', 'last_purchase_cost', 'effective_unit_cost',
+        'has_price_discrepancy', 'price_discrepancy_pct', 'reorder_value',
+        'estimated_purchase_value',
+    ]
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls.company = cls.env.company
+        cls.warehouse = cls.env['stock.warehouse'].search(
+            [('company_id', '=', cls.company.id)], limit=1
+        )
+        if not cls.warehouse:
+            cls.warehouse = cls.env['stock.warehouse'].create({
+                'name': 'Cost Visibility Test WH', 'code': 'CVWH', 'company_id': cls.company.id,
+            })
+        product = cls.env['product.product'].create({
+            'name': 'Cost Visibility Widget', 'type': 'product', 'standard_price': 5.0,
+        })
+        cls.suggestion = cls.env['smart.reorder.suggestion'].create({
+            'company_id': cls.company.id, 'warehouse_id': cls.warehouse.id,
+            'product_id': product.id, 'urgency': 'normal',
+            'product_cost': 5.0, 'vendor_price': 6.0,
+            'last_purchase_cost': 4.5, 'effective_unit_cost': 4.5,
+            'suggested_reorder_qty': 3.0,
+        })
+
+        user_group = cls.env.ref('smart_reorder_advisor.group_smart_reorder_user')
+        cost_viewer_group = cls.env.ref('smart_reorder_advisor.group_smart_reorder_cost_viewer')
+        manager_group = cls.env.ref('smart_reorder_advisor.group_smart_reorder_manager')
+
+        cls.plain_user = cls.env['res.users'].create({
+            'name': 'Cost Visibility Plain User',
+            'login': 'cost_visibility_plain_user_test',
+            'groups_id': [(6, 0, [cls.env.ref('base.group_user').id, user_group.id])],
+        })
+        cls.cost_viewer_user = cls.env['res.users'].create({
+            'name': 'Cost Visibility Cost Viewer',
+            'login': 'cost_visibility_cost_viewer_test',
+            'groups_id': [(6, 0, [cls.env.ref('base.group_user').id, cost_viewer_group.id])],
+        })
+        cls.manager_user = cls.env['res.users'].create({
+            'name': 'Cost Visibility Manager',
+            'login': 'cost_visibility_manager_test',
+            'groups_id': [(6, 0, [cls.env.ref('base.group_user').id, manager_group.id])],
+        })
+
+    def test_plain_user_cannot_see_cost_fields(self):
+        fields_info = self.env['smart.reorder.suggestion'].with_user(
+            self.plain_user
+        ).fields_get(self.COST_FIELDS)
+        self.assertEqual(fields_info, {}, 'a plain Reorder User must not see any cost field metadata')
+
+    def test_cost_viewer_sees_cost_fields_without_being_a_manager(self):
+        fields_info = self.env['smart.reorder.suggestion'].with_user(
+            self.cost_viewer_user
+        ).fields_get(self.COST_FIELDS)
+        self.assertEqual(set(fields_info.keys()), set(self.COST_FIELDS))
+        # Confirm this user still isn't a manager (Cost Viewer is a separate axis).
+        self.assertFalse(self.cost_viewer_user.has_group('smart_reorder_advisor.group_smart_reorder_manager'))
+
+    def test_manager_sees_cost_fields_via_implied_group(self):
+        fields_info = self.env['smart.reorder.suggestion'].with_user(
+            self.manager_user
+        ).fields_get(self.COST_FIELDS)
+        self.assertEqual(set(fields_info.keys()), set(self.COST_FIELDS))
+        self.assertTrue(self.manager_user.has_group('smart_reorder_advisor.group_smart_reorder_cost_viewer'))
+
+    def test_export_redacts_cost_for_plain_user(self):
+        wizard = self.env['smart.reorder.export.wizard'].with_user(self.plain_user).with_context(
+            active_ids=[self.suggestion.id]
+        ).create({'export_format': 'full'})
+        xlsx_bytes = wizard._build_xlsx(self.suggestion)
+        wb = load_workbook(io.BytesIO(xlsx_bytes))
+        ws = wb.active
+        data_row = next(ws.iter_rows(min_row=2, max_row=2, values_only=True))
+        self.assertEqual(data_row[31], '— (no access)')  # Unit Cost (col 32, 0-indexed 31)
+        self.assertEqual(data_row[42], '— (no access)')  # Last Purchase Cost
+
+    def test_export_shows_real_cost_for_cost_viewer(self):
+        wizard = self.env['smart.reorder.export.wizard'].with_user(self.cost_viewer_user).with_context(
+            active_ids=[self.suggestion.id]
+        ).create({'export_format': 'full'})
+        xlsx_bytes = wizard._build_xlsx(self.suggestion)
+        wb = load_workbook(io.BytesIO(xlsx_bytes))
+        ws = wb.active
+        data_row = next(ws.iter_rows(min_row=2, max_row=2, values_only=True))
+        self.assertEqual(data_row[31], 5.0)
+        self.assertEqual(data_row[42], 4.5)
+
+
+@tagged('post_install', '-at_install')
 class TestReorderConfigConstraints(TransactionCase):
 
     def test_negative_constraints(self):
@@ -5071,6 +5829,26 @@ class TestReorderConfigConstraints(TransactionCase):
         # Test negative default_internal_transfer_days raises ValidationError
         with self.assertRaises(ValidationError):
             config.write({'default_internal_transfer_days': -5})
+
+    def test_spike_dominance_pct_must_be_between_0_and_100(self):
+        company = self.env.company
+        config = self.env['smart.reorder.config'].create({'company_id': company.id})
+        with self.assertRaises(ValidationError):
+            config.write({'spike_dominance_pct': 0.0})
+        with self.assertRaises(ValidationError):
+            config.write({'spike_dominance_pct': 150.0})
+        with self.assertRaises(ValidationError):
+            config.write({'spike_dominance_pct': -10.0})
+        config.write({'spike_dominance_pct': 60.0})  # must not raise
+        self.assertEqual(config.spike_dominance_pct, 60.0)
+
+    def test_spike_multiplier_must_be_at_least_one(self):
+        company = self.env.company
+        config = self.env['smart.reorder.config'].create({'company_id': company.id})
+        with self.assertRaises(ValidationError):
+            config.write({'spike_multiplier': 0.5})
+        config.write({'spike_multiplier': 3.0})  # must not raise
+        self.assertEqual(config.spike_multiplier, 3.0)
 
 
 @tagged('post_install', '-at_install')

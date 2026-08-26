@@ -713,9 +713,12 @@ class SmartReorderSuggestion(models.Model):
                         'abc_a_threshold': config.abc_a_threshold,
                         'abc_b_threshold': config.abc_b_threshold,
                         'min_spike_size': config.min_spike_size,
+                        'spike_dominance_pct': config.spike_dominance_pct,
+                        'spike_multiplier': config.spike_multiplier,
                         'overstock_ceiling_months': config.overstock_ceiling_months,
                         'transfer_surplus_threshold': config.transfer_surplus_threshold,
                         'default_internal_transfer_days': config.default_internal_transfer_days,
+                        'temp_vendor_ids': config.temp_vendor_ids.ids,
                     }
 
                     warehouses_list = [{'id': wh.id, 'name': wh.name} for wh in warehouses]
@@ -928,6 +931,7 @@ class SmartReorderSuggestion(models.Model):
                                 # consume the flag — if it's genuinely still needed
                                 # after that (order lost/delayed), it resurfaces
                                 # normally instead of staying silently hidden.
+                                would_still_be_needed = bool(write_vals.get('reorder_needed'))
                                 write_vals['reorder_needed'] = False
                                 write_vals['is_marked_ordered'] = False
                                 marked_note = (
@@ -937,6 +941,19 @@ class SmartReorderSuggestion(models.Model):
                                     'Will resurface next run if the purchase still has not been logged.'
                                 )
                                 write_vals['notes'] = f'{marked_note}\n\n' + (write_vals.get('notes') or '')
+
+                                # Recommendation: reconciliation trail — resolve
+                                # the pending log entry(ies) for this suggestion
+                                # with whichever outcome actually happened.
+                                pending_logs = self.env['smart.reorder.mark.ordered.log'].sudo().search([
+                                    ('suggestion_id', '=', existing_rec.id),
+                                    ('outcome', '=', 'pending'),
+                                ])
+                                if pending_logs:
+                                    pending_logs.write({
+                                        'outcome': 'resurfaced' if would_still_be_needed else 'cleared',
+                                        'resolved_at': fields.Datetime.now(),
+                                    })
                             to_write.append((existing_rec, write_vals))
                         else:
                             vals['prior_suggested_qty'] = 0.0
@@ -1202,6 +1219,7 @@ class SmartReorderSuggestion(models.Model):
             elapsed, result.get('created', 0), result.get('critical', 0)
         )
         self.env['smart.reorder.forecast.snapshot'].sudo()._score_snapshots()
+        self.env['smart.reorder.cron.log'].sudo()._purge_old_logs()
 
     @api.model
     def _send_notifications(self, company, config, critical_count, warehouse_id=None):

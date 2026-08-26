@@ -1,0 +1,95 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+
+    <record id="view_smart_reorder_mark_ordered_log_list" model="ir.ui.view">
+        <field name="name">smart.reorder.mark.ordered.log.tree</field>
+        <field name="model">smart.reorder.mark.ordered.log</field>
+        <field name="arch" type="xml">
+            <tree string="Mark as Ordered — Reconciliation" create="false" edit="false" delete="false"
+                  decoration-warning="outcome == 'pending'"
+                  decoration-danger="outcome == 'resurfaced'"
+                  decoration-success="outcome == 'cleared'">
+                <field name="marked_at"/>
+                <field name="company_id" groups="base.group_multi_company"/>
+                <field name="warehouse_id"/>
+                <field name="product_id"/>
+                <field name="suggested_qty_at_mark"/>
+                <field name="marked_by_id"/>
+                <field name="confirmer_name" optional="hide"/>
+                <field name="outcome" widget="badge"
+                       decoration-warning="outcome == 'pending'"
+                       decoration-danger="outcome == 'resurfaced'"
+                       decoration-success="outcome == 'cleared'"/>
+                <field name="resolved_at" optional="show"/>
+            </tree>
+        </field>
+    </record>
+
+    <record id="view_smart_reorder_mark_ordered_log_form" model="ir.ui.view">
+        <field name="name">smart.reorder.mark.ordered.log.form</field>
+        <field name="model">smart.reorder.mark.ordered.log</field>
+        <field name="arch" type="xml">
+            <form string="Mark as Ordered — Reconciliation" create="false" edit="false">
+                <sheet>
+                    <div class="oe_title">
+                        <h1><field name="product_id" readonly="1"/></h1>
+                    </div>
+                    <group>
+                        <group string="At the Time It Was Marked">
+                            <field name="company_id" readonly="1" groups="base.group_multi_company"/>
+                            <field name="warehouse_id" readonly="1"/>
+                            <field name="marked_at" readonly="1"/>
+                            <field name="marked_by_id" readonly="1"/>
+                            <field name="confirmer_name" readonly="1"/>
+                            <field name="suggested_qty_at_mark" readonly="1"/>
+                        </group>
+                        <group string="Resolution">
+                            <field name="outcome" readonly="1" widget="badge"
+                                   decoration-warning="outcome == 'pending'"
+                                   decoration-danger="outcome == 'resurfaced'"
+                                   decoration-success="outcome == 'cleared'"/>
+                            <field name="resolved_at" readonly="1"/>
+                            <field name="suggestion_id" readonly="1"/>
+                        </group>
+                    </group>
+                </sheet>
+            </form>
+        </field>
+    </record>
+
+    <record id="view_smart_reorder_mark_ordered_log_search" model="ir.ui.view">
+        <field name="name">smart.reorder.mark.ordered.log.search</field>
+        <field name="model">smart.reorder.mark.ordered.log</field>
+        <field name="arch" type="xml">
+            <search string="Search Mark-Ordered Log">
+                <field name="product_id"/>
+                <field name="warehouse_id"/>
+                <field name="marked_by_id"/>
+
+                <filter name="pending"    string="Pending"    domain="[('outcome','=','pending')]"/>
+                <filter name="resurfaced" string="Resurfaced" domain="[('outcome','=','resurfaced')]"/>
+                <filter name="cleared"    string="Cleared"    domain="[('outcome','=','cleared')]"/>
+
+                <group expand="0" string="Group By">
+                    <filter name="gb_outcome"   string="Outcome"   context="{'group_by':'outcome'}"/>
+                    <filter name="gb_warehouse" string="Warehouse" context="{'group_by':'warehouse_id'}"/>
+                    <filter name="gb_marked_by" string="Marked By" context="{'group_by':'marked_by_id'}"/>
+                </group>
+            </search>
+        </field>
+    </record>
+
+    <record id="action_smart_reorder_mark_ordered_log" model="ir.actions.act_window">
+        <field name="name">Mark as Ordered — Reconciliation</field>
+        <field name="res_model">smart.reorder.mark.ordered.log</field>
+        <field name="view_mode">tree,form</field>
+        <field name="search_view_id" ref="view_smart_reorder_mark_ordered_log_search"/>
+        <field name="help">
+            One row per "Mark as Ordered" click. Pending = the next analysis run
+            hasn't processed it yet. Resurfaced = it was still needed after the
+            one suppressed cycle — worth checking whether that order is actually
+            lost or just not logged yet. Cleared = it resolved on its own.
+        </field>
+    </record>
+
+</odoo>

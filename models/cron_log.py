@@ -1,4 +1,5 @@
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
+from dateutil.relativedelta import relativedelta
 from odoo import models, fields, api
 
 
@@ -85,6 +86,37 @@ class SmartReorderCronLog(models.Model):
              WHERE status = 'running'
         """)
 
+    @api.model
+    def _purge_old_logs(self):
+        """Recommendation: Run History has no retention today, unlike forecast
+        snapshots — it grows one row per company per run forever. Mirrors
+        ForecastSnapshot._score_snapshots()'s retention purge, called from
+        action_run_weekly_cron() alongside it. Never purges a 'running' row,
+        even if it looks old (a stuck lock is a separate problem — see
+        action_clear_lock — not something a retention purge should paper over)."""
+        configs = self.env['smart.reorder.config'].sudo().search(
+            [('cron_log_retention_months', '>', 0)]
+        )
+        today = date.today()
+        for config in configs:
+            limit_date = today - relativedelta(months=config.cron_log_retention_months)
+            expired = self.sudo().search([
+                ('company_id', '=', config.company_id.id),
+                ('started_at', '<', limit_date),
+                ('status', '!=', 'running'),
+            ])
+            if expired:
+                expired.unlink()
+
+
+# Recommendation: cron missed-run detection. Expected gap between successful
+# runs per configured frequency, used both for the dashboard's passive
+# "is this overdue" display and the active heartbeat check below.
+CRON_FREQUENCY_DAYS = {'weekly': 7, 'biweekly': 14, 'monthly': 30}
+# A run finishing a bit late (server load, long product catalog) shouldn't
+# immediately read as "broken" — only flag once it's meaningfully overdue.
+CRON_OVERDUE_GRACE_MULTIPLIER = 1.5
+
 
 class SmartReorderObservabilityDashboard(models.TransientModel):
     _name = 'smart.reorder.observability.dashboard'
@@ -97,7 +129,14 @@ class SmartReorderObservabilityDashboard(models.TransientModel):
     failed_runs = fields.Integer(string='Failed Runs (Last 30 Days)', compute='_compute_stats')
     picking_hook_errors = fields.Integer(string='Total Picking Hook Errors', compute='_compute_stats')
 
+    cron_active = fields.Boolean(string='Weekly Cron Enabled?', compute='_compute_stats')
+    last_successful_run_at = fields.Datetime(string='Last Successful Run', compute='_compute_stats')
+    days_since_last_run = fields.Integer(string='Days Since Last Successful Run', compute='_compute_stats')
+    expected_interval_days = fields.Integer(string='Expected Interval (Days)', compute='_compute_stats')
+    is_run_overdue = fields.Boolean(string='Run Overdue?', compute='_compute_stats')
+
     def _compute_stats(self):
+        cron = self.env.ref('smart_reorder_advisor.cron_smart_reorder_weekly', raise_if_not_found=False)
         for rec in self:
             limit_date = fields.Datetime.now() - timedelta(days=30)
             logs = self.env['smart.reorder.cron.log'].search([
@@ -119,6 +158,31 @@ class SmartReorderObservabilityDashboard(models.TransientModel):
             rec.failure_rate_30_days = rate
             rec.avg_duration = avg_dur
             rec.picking_hook_errors = hook_errors
+
+            rec.cron_active = bool(cron and cron.active)
+            expected_days = CRON_FREQUENCY_DAYS.get(config.cron_frequency if config else 'weekly', 7)
+            rec.expected_interval_days = expected_days
+            last_log = self.env['smart.reorder.cron.log'].search([
+                ('company_id', '=', rec.company_id.id),
+                ('status', 'in', ('completed', 'completed_with_errors')),
+            ], order='finished_at desc', limit=1)
+            rec.last_successful_run_at = last_log.finished_at if last_log else False
+            if last_log and last_log.finished_at:
+                rec.days_since_last_run = (fields.Datetime.now() - last_log.finished_at).days
+                rec.is_run_overdue = bool(
+                    rec.cron_active
+                    and rec.days_since_last_run > expected_days * CRON_OVERDUE_GRACE_MULTIPLIER
+                )
+            else:
+                rec.days_since_last_run = 0
+                # No successful run ever recorded — only "overdue" if the
+                # cron already missed its own next scheduled fire time, not
+                # merely because a fresh install hasn't had its first chance
+                # to run yet (nextcall still in the future).
+                rec.is_run_overdue = bool(
+                    rec.cron_active and cron and cron.nextcall
+                    and cron.nextcall < fields.Datetime.now()
+                )
 
     @api.model
     def action_open_dashboard(self):

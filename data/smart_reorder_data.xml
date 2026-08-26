@@ -53,5 +53,24 @@
             <field name="user_id" ref="base.user_root"/>
         </record>
 
+        <!--
+        Recommendation: missed-run detection. A lightweight daily heartbeat —
+        NOT a re-run of the analysis itself — that only checks whether the
+        weekly analysis cron has completed successfully within its expected
+        window, and notifies notify_user_ids once if not. Enabled by default
+        since it costs a handful of cheap queries per company per day and is
+        the whole point of "don't let a stuck scheduler go unnoticed."
+        -->
+        <record id="cron_smart_reorder_overdue_check" model="ir.cron">
+            <field name="name">Smart Reorder: Overdue Run Check</field>
+            <field name="model_id" ref="model_smart_reorder_config"/>
+            <field name="state">code</field>
+            <field name="code">model._check_overdue_runs()</field>
+            <field name="interval_number">1</field>
+            <field name="interval_type">days</field>
+            <field name="active">True</field>
+            <field name="user_id" ref="base.user_root"/>
+        </record>
+
     </data>
 </odoo>

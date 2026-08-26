@@ -24,6 +24,10 @@ from ..reorder_engine import (
 
 _MANAGER_GROUP = 'smart_reorder_advisor.group_smart_reorder_manager'
 _USER_GROUP = 'smart_reorder_advisor.group_smart_reorder_user'
+# Recommendation: field-level access for vendor cost/pricing data — a plain
+# Reorder User no longer sees these by default; Cost Viewer or Manager does.
+# Enforced by the ORM itself (fields_get/read), not just hidden in a view.
+_COST_GROUPS = 'smart_reorder_advisor.group_smart_reorder_cost_viewer,smart_reorder_advisor.group_smart_reorder_manager'
 
 _logger = logging.getLogger(__name__)
 
@@ -73,7 +77,7 @@ class SmartReorderSuggestion(models.Model):
         related='product_id.default_code', string='Part Number', store=True,
     )
     product_cost = fields.Float(
-        string='Unit Cost', digits=(16, 3), readonly=True,
+        string='Unit Cost', digits=(16, 3), readonly=True, groups=_COST_GROUPS,
     )
 
     # ── Analysis Window ───────────────────────────────────────────────────────
@@ -179,7 +183,8 @@ class SmartReorderSuggestion(models.Model):
     )
 
     reorder_value         = fields.Monetary(string='Reorder Value', currency_field='currency_id',
-                                            readonly=True, compute='_compute_reorder_value', store=True)
+                                            readonly=True, compute='_compute_reorder_value', store=True,
+                                            groups=_COST_GROUPS)
     currency_id           = fields.Many2one('res.currency', related='company_id.currency_id', store=True)
     reorder_needed        = fields.Boolean( string='Reorder Needed?', readonly=True, tracking=True)
 
@@ -253,6 +258,7 @@ class SmartReorderSuggestion(models.Model):
     vendor_price = fields.Float(
         string='Vendor Price',
         readonly=True,
+        groups=_COST_GROUPS,
         help='Supplier pricelist price converted to company currency at the analysis run rate.',
     )
 
@@ -261,6 +267,7 @@ class SmartReorderSuggestion(models.Model):
         currency_field='currency_id',
         compute='_compute_purchase_value',
         store=True,
+        groups=_COST_GROUPS,
         help='Suggested quantity multiplied by vendor price (converted to company currency).',
     )
 
@@ -272,7 +279,7 @@ class SmartReorderSuggestion(models.Model):
 
     # ── Last Purchase Cost (T-Task1) ─────────────────────────────────────────
     last_purchase_cost = fields.Float(
-        string='Last Purchase Cost', digits=(16, 3), readonly=True,
+        string='Last Purchase Cost', digits=(16, 3), readonly=True, groups=_COST_GROUPS,
         help='Unit price actually paid on the most recent confirmed purchase order '
              '(state Purchase Order or Done) for this product, converted to the '
              "product's unit of measure and company currency. Blank/0 means there is "
@@ -287,7 +294,7 @@ class SmartReorderSuggestion(models.Model):
         help='Vendor on the most recent confirmed purchase order for this product.'
     )
     effective_unit_cost = fields.Float(
-        string='Effective Unit Cost', digits=(16, 3), readonly=True,
+        string='Effective Unit Cost', digits=(16, 3), readonly=True, groups=_COST_GROUPS,
         help='Best available cost for ordering decisions, in priority order: '
              'Last Purchase Cost (what was actually paid) if known, otherwise '
              'Vendor Price (pricelist), otherwise Standard Cost.'
@@ -295,17 +302,34 @@ class SmartReorderSuggestion(models.Model):
 
     # ── Price Discrepancy Flag (Task 2) ───────────────────────────────────────
     has_price_discrepancy = fields.Boolean(
-        string='Price Discrepancy?', readonly=True, index=True,
+        string='Price Discrepancy?', readonly=True, index=True, groups=_COST_GROUPS,
         help='True when the vendor pricelist price differs from the last actual '
              'purchase cost by more than 15%. Both a Vendor Price and a Last '
              'Purchase Cost must be on record for this comparison to run — '
              'never flagged when either is missing.'
     )
     price_discrepancy_pct = fields.Float(
-        string='Price Discrepancy (%)', digits=(16, 1), readonly=True,
+        string='Price Discrepancy (%)', digits=(16, 1), readonly=True, groups=_COST_GROUPS,
         help='Vendor Price vs. Last Purchase Cost, as a percentage change from '
              'Last Purchase Cost. Positive means the pricelist price is higher '
              'than what was actually paid.'
+    )
+
+    # ── Data Cleanup Triage (Recommendation) ─────────────────────────────────
+    needs_vendor_assignment = fields.Boolean(
+        string='Needs Vendor Assignment?', readonly=True, index=True,
+        help='True when this suggestion needs reordering but has no vendor, or '
+             'only a Temporary/Placeholder Vendor (Configuration → Company '
+             'Settings). Feeds the "Needs Vendor Assignment" triage list and the '
+             "boss report's Needs Attention section."
+    )
+    dead_stock_critical_review = fields.Boolean(
+        string='Dead Stock + Critical — Needs Review?', readonly=True, index=True,
+        help='True when this item is both flagged Dead Stock and shows Critical '
+             'urgency — a real but misleading combination (negative/promised '
+             'stock forces a positive reorder qty even though nothing has sold '
+             'in months). Needs a human judgment call, not an automatic urgent '
+             'flag. Feeds the "Dead Stock — Needs Review" triage list.'
     )
 
     alt_vendor_id          = fields.Many2one('res.partner', string='Fastest Alternative Vendor', readonly=True)
@@ -357,6 +381,24 @@ class SmartReorderSuggestion(models.Model):
              'Company Settings). Refreshed on each analysis run.'
     )
 
+    # ── Action Center (Recommendation) ───────────────────────────────────────
+    # Purely derived from the six flags above — a standard reactive compute
+    # (not engine-computed) is the right tool here, since nothing outside this
+    # one record is needed to work it out, and it needs to stay correct the
+    # instant any of those six flags changes for any reason (a wizard clearing
+    # needs_vendor_assignment, a snooze, etc.), not just after the next
+    # generate_suggestions() run.
+    attention_flag_count = fields.Integer(
+        string='Attention Flags', compute='_compute_attention_summary', store=True, index=True,
+        help='How many of the six triage flags (Needs Review, Stale Data, Stale '
+             'Draft PO, Needs Vendor Assignment, Dead Stock + Critical, Price '
+             'Discrepancy) are currently set on this suggestion.'
+    )
+    attention_reasons = fields.Char(
+        string='Why Flagged', compute='_compute_attention_summary', store=True,
+        help='Plain-language list of which triage flag(s) are currently set.'
+    )
+
     notes = fields.Text(string='Calculation Breakdown', readonly=True)
 
     @api.depends('po_ids', 'po_ids.state', 'po_ids.name')
@@ -364,6 +406,26 @@ class SmartReorderSuggestion(models.Model):
         for rec in self:
             drafts = rec.po_ids.filtered(lambda po: po.state == 'draft')
             rec.draft_po_ref = ', '.join(drafts.mapped('name')) if drafts else False
+
+    @api.depends('needs_review', 'is_stale', 'is_draft_po_stale', 'needs_vendor_assignment',
+                'dead_stock_critical_review', 'has_price_discrepancy')
+    def _compute_attention_summary(self):
+        for rec in self:
+            reasons = []
+            if rec.needs_review:
+                reasons.append(_('Needs Review'))
+            if rec.is_stale:
+                reasons.append(_('Stale Data'))
+            if rec.is_draft_po_stale:
+                reasons.append(_('Stale Draft PO'))
+            if rec.needs_vendor_assignment:
+                reasons.append(_('Needs Vendor Assignment'))
+            if rec.dead_stock_critical_review:
+                reasons.append(_('Dead Stock + Critical'))
+            if rec.has_price_discrepancy:
+                reasons.append(_('Price Discrepancy'))
+            rec.attention_flag_count = len(reasons)
+            rec.attention_reasons = ', '.join(reasons) if reasons else False
 
     # ── Snooze ────────────────────────────────────────────────────────────────
     snoozed_until = fields.Date(
@@ -489,8 +551,12 @@ class SmartReorderSuggestion(models.Model):
         return calc_seasonal_note(current_qty, ly_qty)
 
     @staticmethod
-    def _compute_robust_monthly_demand(monthly_series, min_spike_size=10.0):
-        return compute_robust_monthly_demand(monthly_series, min_spike_size=min_spike_size)
+    def _compute_robust_monthly_demand(monthly_series, min_spike_size=10.0,
+                                       spike_dominance_pct=50.0, spike_multiplier=4.0):
+        return compute_robust_monthly_demand(
+            monthly_series, min_spike_size=min_spike_size,
+            spike_dominance_pct=spike_dominance_pct, spike_multiplier=spike_multiplier,
+        )
 
     @staticmethod
     def _calc_delta_pct(old_qty, new_qty):

@@ -405,6 +405,23 @@ class SmartReorderSuggestion(models.Model):
             'reorder_needed': self.suggested_reorder_qty > 0 or self.qty_on_hand < 0,
         })
 
+    def _create_mark_ordered_log_entries(self):
+        """Recommendation: reconciliation trail — one immutable record per
+        Mark as Ordered click, resolved later by _generate_for_company()'s
+        existing suppression-consuming step (see suggestion_engine.py)."""
+        if not self:
+            return
+        now = fields.Datetime.now()
+        self.env['smart.reorder.mark.ordered.log'].sudo().create([{
+            'company_id': rec.company_id.id,
+            'warehouse_id': rec.warehouse_id.id,
+            'product_id': rec.product_id.id,
+            'suggestion_id': rec.id,
+            'marked_at': now,
+            'marked_by_id': self.env.user.id,
+            'suggested_qty_at_mark': rec.suggested_reorder_qty,
+        } for rec in self])
+
     def action_mark_ordered(self):
         """Task 5: the boss already placed this order directly (email/vendor
         site) — no PO, no wizard, just a quick note so it stops nagging until
@@ -418,6 +435,7 @@ class SmartReorderSuggestion(models.Model):
             'marked_ordered_by_id': self.env.user.id,
             'reorder_needed': False,
         })
+        self._create_mark_ordered_log_entries()
         return {
             'type': 'ir.actions.client',
             'tag': 'display_notification',
@@ -472,6 +490,7 @@ class SmartReorderSuggestion(models.Model):
             'marked_ordered_by_id': self.env.user.id,
             'reorder_needed': False,
         })
+        self._create_mark_ordered_log_entries()
 
     def action_open_product(self):
         self.ensure_one()

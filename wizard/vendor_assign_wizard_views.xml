@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+
+    <record id="view_smart_reorder_vendor_assign_wizard_form" model="ir.ui.view">
+        <field name="name">smart.reorder.vendor.assign.wizard.form</field>
+        <field name="model">smart.reorder.vendor.assign.wizard</field>
+        <field name="arch" type="xml">
+            <form string="Bulk Assign Vendor">
+                <div class="oe_title">
+                    <h2>👤 Bulk Assign Vendor</h2>
+                    <p class="text-muted">
+                        This will set the chosen vendor as the primary supplier
+                        (product.supplierinfo) on the product behind each selected
+                        suggestion — a real, durable vendor assignment, not just a
+                        cosmetic change to the suggestion.
+                    </p>
+                </div>
+                <group>
+                    <field name="suggestion_count" readonly="1"/>
+                    <field name="vendor_id"/>
+                </group>
+                <footer>
+                    <button name="action_assign_vendor" string="Assign Vendor" type="object" class="btn-primary"/>
+                    <button string="Cancel" class="btn-secondary" special="cancel"/>
+                </footer>
+            </form>
+        </field>
+    </record>
+
+    <record id="action_smart_reorder_vendor_assign_wizard" model="ir.actions.act_window">
+        <field name="name">Bulk Assign Vendor</field>
+        <field name="res_model">smart.reorder.vendor.assign.wizard</field>
+        <field name="view_mode">form</field>
+        <field name="target">new</field>
+        <field name="binding_model_id" ref="model_smart_reorder_suggestion"/>
+        <field name="binding_view_types">list</field>
+    </record>
+
+</odoo>

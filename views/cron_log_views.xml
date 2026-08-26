@@ -133,6 +133,13 @@
                     <div class="oe_title">
                         <h1>Reorder Observability Dashboard</h1>
                     </div>
+                    <div class="alert alert-danger" role="alert" invisible="not is_run_overdue">
+                        ⚠️ <strong>WEEKLY ANALYSIS IS OVERDUE.</strong>
+                        Expected every <field name="expected_interval_days" readonly="1" nolabel="1" class="oe_inline"/> days;
+                        it has been <field name="days_since_last_run" readonly="1" nolabel="1" class="oe_inline"/> days
+                        since the last successful run. Check Run History for errors, and confirm the
+                        scheduled action is actually enabled and the worker isn't stuck.
+                    </div>
                     <group>
                         <group string="Cron Run Statistics (Last 30 Days)">
                             <field name="total_runs" readonly="1"/>
@@ -142,6 +149,17 @@
                         </group>
                         <group string="Real-Time Hook Observability">
                             <field name="picking_hook_errors" readonly="1" decoration-danger="picking_hook_errors &gt; 0"/>
+                        </group>
+                    </group>
+                    <group string="Missed-Run Detection">
+                        <group>
+                            <field name="cron_active" readonly="1"/>
+                            <field name="last_successful_run_at" readonly="1"/>
+                            <field name="days_since_last_run" readonly="1"/>
+                        </group>
+                        <group>
+                            <field name="expected_interval_days" readonly="1"/>
+                            <field name="is_run_overdue" readonly="1" decoration-danger="is_run_overdue"/>
                         </group>
                     </group>
                 </sheet>

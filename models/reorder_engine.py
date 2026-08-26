@@ -91,7 +91,8 @@ def calc_seasonal_note(current_qty, ly_qty):
     return f'≈ Consistent with same period last year ({pct:+.0f}%)'
 
 
-def compute_robust_monthly_demand(monthly_series, min_spike_size=10.0):
+def compute_robust_monthly_demand(monthly_series, min_spike_size=10.0,
+                                   spike_dominance_pct=50.0, spike_multiplier=4.0):
     """
     Forecast monthly demand from a most-recent-first list of monthly quantities
     using average + MAD (median absolute deviation) outlier rejection.
@@ -100,6 +101,14 @@ def compute_robust_monthly_demand(monthly_series, min_spike_size=10.0):
     excluded) if its quantity is at least this large. Prevents a single small
     sale (e.g. 1 unit sold once) from being treated as a "4x the next-highest
     month" spike merely because the next-highest month is zero.
+
+    spike_dominance_pct: the month must also make up at least this percentage
+    of total sales in the window (default 50%) to count as a spike.
+
+    spike_multiplier: the month must also be at least this many times larger
+    than the next-highest month (default 4x) to count as a spike — the check
+    that distinguishes a truly isolated one-off from a lumpy-but-real pattern
+    where more than one big order happened.
     """
     if not monthly_series:
         return 0.0, 0, None, []
@@ -118,8 +127,8 @@ def compute_robust_monthly_demand(monthly_series, min_spike_size=10.0):
             next_highest = max(other_months) if other_months else 0.0
             is_spike = (
                 max_val >= min_spike_size
-                and max_val >= 0.5 * total_sales
-                and max_val >= 4 * max(next_highest, 1.0)
+                and max_val >= (spike_dominance_pct / 100.0) * total_sales
+                and max_val >= spike_multiplier * max(next_highest, 1.0)
             )
 
         if is_spike:
@@ -276,6 +285,8 @@ def calculate_product_suggestion(
             compute_robust_monthly_demand(
                 monthly_series,
                 min_spike_size=config_data.get('min_spike_size', 10.0),
+                spike_dominance_pct=config_data.get('spike_dominance_pct', 50.0),
+                spike_multiplier=config_data.get('spike_multiplier', 4.0),
             )
         )
     qty_available  = qty_on_hand + qty_incoming - qty_outgoing
@@ -474,6 +485,16 @@ def calculate_product_suggestion(
             qty_on_hand, months_of_stock, avg_monthly,
             lead_months, is_dead, suggested_qty
         )
+
+    # Data Cleanup Triage (Recommendation): feeds the two bulk-triage list
+    # views. "Needs vendor assignment" covers both no vendor at all and a
+    # designated placeholder ("Temporary Supplier"-style) vendor — either way
+    # a real PO can't safely be created yet. "Dead stock + critical" is the
+    # real-but-misleading combination where negative/promised stock forces a
+    # positive reorder qty on something that hasn't sold in months.
+    temp_vendor_ids_set = set(config_data.get('temp_vendor_ids', []))
+    needs_vendor_assignment = bool(reorder_needed) and (not v_partner_id or v_partner_id in temp_vendor_ids_set)
+    dead_stock_critical_review = bool(is_dead and urgency == 'critical')
 
     # Inter-Warehouse Rebalancing (Phase 4)
     transfer_source_wh_id = False
@@ -702,6 +723,8 @@ def calculate_product_suggestion(
         'effective_unit_cost':      effective_unit_cost,
         'has_price_discrepancy':    has_price_discrepancy,
         'price_discrepancy_pct':    price_discrepancy_pct,
+        'needs_vendor_assignment':  needs_vendor_assignment,
+        'dead_stock_critical_review': dead_stock_critical_review,
         'alt_vendor_id':            alt_vendor_id_val,
         'alt_vendor_lead_days':     alt_vendor_lead_days_val,
         'transfer_source_warehouse_id': transfer_source_wh_id,
