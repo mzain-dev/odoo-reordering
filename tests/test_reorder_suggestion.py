@@ -2912,24 +2912,25 @@ class TestExportSuggestionsWizard(TransactionCase):
         ws = wb.active
         header_row = [cell.value for cell in next(ws.iter_rows(min_row=1, max_row=1))]
         self.assertEqual(header_row, [
-            'Product Name/Description', 'Warehouse', 'On Hand Qty',
+            'Part Number', 'Product Name/Description', 'Warehouse', 'On Hand Qty',
             'Suggested Reorder Qty', 'Vendor', 'Unit Cost', 'Reorder Value',
             'Dead Stock?', 'Last Sale Date',
         ])
         self.assertEqual(ws.max_row, 3, 'header + 2 data rows')
 
         data_rows = list(ws.iter_rows(min_row=2, max_row=3, values_only=True))
-        names = {row[0] for row in data_rows}
+        names = {row[1] for row in data_rows}
         self.assertEqual(names, {'Export Widget A', 'Export Widget B'}, 'no vendor part codes in the identity column')
 
-        row_a = next(row for row in data_rows if row[0] == 'Export Widget A')
-        self.assertEqual(row_a[1], self.warehouse.name)
-        self.assertEqual(row_a[2], -5.0)
-        self.assertEqual(row_a[3], 10.0)
-        self.assertEqual(row_a[4], 'Test Export Vendor')
-        self.assertEqual(row_a[6], 20.0)
-        self.assertEqual(row_a[7], 'No')
-        self.assertEqual(row_a[8], self.sugg_a.last_sale_date)
+        row_a = next(row for row in data_rows if row[1] == 'Export Widget A')
+        self.assertEqual(row_a[0], 'EXP-A')
+        self.assertEqual(row_a[2], self.warehouse.name)
+        self.assertEqual(row_a[3], -5.0)
+        self.assertEqual(row_a[4], 10.0)
+        self.assertEqual(row_a[5], 'Test Export Vendor')
+        self.assertEqual(row_a[7], 20.0)
+        self.assertEqual(row_a[8], 'No')
+        self.assertEqual(row_a[9], self.sugg_a.last_sale_date)
 
     def test_export_full_produces_all_columns(self):
         wizard = self.Wizard.with_context(

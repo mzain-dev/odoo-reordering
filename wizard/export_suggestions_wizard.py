@@ -214,15 +214,16 @@ class ExportSuggestionsWizard(models.TransientModel):
         redacted = '— (no access)'
 
         for row, rec in enumerate(suggestions, start=2):
-            ws.cell(row=row, column=1, value=rec.product_id.name or '')
-            ws.cell(row=row, column=2, value=rec.warehouse_id.name or '')
-            ws.cell(row=row, column=3, value=rec.qty_on_hand)
-            ws.cell(row=row, column=4, value=rec.suggested_reorder_qty)
-            ws.cell(row=row, column=5, value=rec.vendor_id.name or '')
-            ws.cell(row=row, column=6, value=rec.product_cost if can_see_cost else redacted)
-            ws.cell(row=row, column=7, value=rec.reorder_value if can_see_cost else redacted)
-            ws.cell(row=row, column=8, value='Yes' if rec.is_dead_stock else 'No')
-            ws.cell(row=row, column=9, value=rec.last_sale_date or None)
+            ws.cell(row=row, column=1, value=rec.product_id.default_code or '')
+            ws.cell(row=row, column=2, value=rec.product_id.name or '')
+            ws.cell(row=row, column=3, value=rec.warehouse_id.name or '')
+            ws.cell(row=row, column=4, value=rec.qty_on_hand)
+            ws.cell(row=row, column=5, value=rec.suggested_reorder_qty)
+            ws.cell(row=row, column=6, value=rec.vendor_id.name or '')
+            ws.cell(row=row, column=7, value=rec.product_cost if can_see_cost else redacted)
+            ws.cell(row=row, column=8, value=rec.reorder_value if can_see_cost else redacted)
+            ws.cell(row=row, column=9, value='Yes' if rec.is_dead_stock else 'No')
+            ws.cell(row=row, column=10, value=rec.last_sale_date or None)
 
         return self._finalize_sheet(wb, ws, ESSENTIAL_HEADERS)
 
