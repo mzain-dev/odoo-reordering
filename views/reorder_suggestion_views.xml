@@ -792,12 +792,12 @@
     <record id="action_smart_reorder_suggestions" model="ir.actions.act_window">
         <field name="name">Reorder Suggestions</field>
         <field name="res_model">smart.reorder.suggestion</field>
-        <field name="view_mode">kanban,tree,form</field>
+        <field name="view_mode">tree,kanban,form</field>
         <field name="search_view_id" ref="view_smart_reorder_suggestion_search"/>
         <field name="context">{'search_default_reorder_needed': 1}</field>
         <field name="view_ids" eval="[(5, 0, 0),
-            (0, 0, {'view_mode': 'kanban', 'view_id': ref('view_smart_reorder_suggestion_kanban')}),
             (0, 0, {'view_mode': 'tree', 'view_id': ref('view_smart_reorder_suggestion_list')}),
+            (0, 0, {'view_mode': 'kanban', 'view_id': ref('view_smart_reorder_suggestion_kanban')}),
             (0, 0, {'view_mode': 'form', 'view_id': ref('view_smart_reorder_suggestion_form')})]"/>
     </record>
 
