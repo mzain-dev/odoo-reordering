@@ -756,6 +756,7 @@
                        decoration-muted="urgency == 'dead'"/>
                 <field name="attention_flag_count" string="#" widget="integer"/>
                 <field name="attention_reasons" string="Why Flagged"/>
+                <field name="company_id" groups="base.group_multi_company" optional="hide"/>
                 <field name="warehouse_id"/>
                 <field name="default_code" string="Part No."/>
                 <field name="product_id"/>
@@ -764,8 +765,29 @@
                 <field name="suggested_reorder_qty" string="Suggest Reorder"
                        decoration-bf="reorder_needed == True"/>
                 <field name="vendor_id"/>
-                <field name="reorder_value" widget="monetary"
+                <field name="reorder_value" widget="monetary" optional="show"
                        options="{'currency_field': 'currency_id'}"/>
+
+                <field name="months_of_stock"  string="Months Left" digits="[16,1]" optional="hide"
+                       decoration-danger="months_of_stock &lt; 1"
+                       decoration-warning="months_of_stock &lt; 2"/>
+                <field name="avg_monthly_demand" string="Avg/Month" digits="[16,2]" optional="hide"/>
+                <field name="product_cost"     string="Unit Cost" optional="hide"/>
+                <field name="last_sale_date"   string="Last Sale Date" optional="hide"/>
+                <field name="months_since_last_sale" string="Mo. No Sale" optional="hide"/>
+                <field name="draft_po_ref"     string="Draft PO" optional="hide"/>
+
+                <field name="is_stale"         string="🕓 Stale?" optional="hide"/>
+                <field name="needs_review"     string="🔎 Review?" optional="hide"/>
+                <field name="is_draft_po_stale" string="Stale Draft PO?" optional="hide"/>
+                <field name="needs_vendor_assignment" string="👤 Needs Vendor?" optional="hide"/>
+                <field name="dead_stock_critical_review" string="☠️ Dead+Critical?" optional="hide"/>
+                <field name="has_price_discrepancy" string="💰 Price Discrepancy?" optional="hide"/>
+                <field name="stock_correction_candidate" string="🔧 Stock Correction?" optional="hide"/>
+                <field name="suggested_resolution" string="Suggested Resolution" optional="hide" widget="badge"
+                       decoration-warning="suggested_resolution == 'stock_correction'"
+                       decoration-info="suggested_resolution == 'reorder'"/>
+
                 <field name="currency_id" column_invisible="True"/>
                 <field name="urgency_rank" column_invisible="True"/>
                 <field name="reorder_needed" column_invisible="True"/>

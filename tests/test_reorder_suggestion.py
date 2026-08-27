@@ -4281,6 +4281,58 @@ class TestBossWeeklyOrderReport(TransactionCase):
         self.assertIn('GRAND TOTAL', html)
         self.assertIn('50.00', html)
 
+    def test_stock_correction_candidate_routed_to_needs_attention_not_vendor_block(self):
+        # Recommendation: a stock-correction candidate must never appear as an
+        # ordinary "reorder this" line under its vendor — that would suggest
+        # ordering units just to zero out what is likely a data/count error.
+        product = self.env['product.product'].create({
+            'name': 'Boss Report Stock Correction Widget', 'type': 'product', 'standard_price': 2.0,
+        })
+        sug = self.Suggestion.create({
+            'company_id': self.company.id, 'warehouse_id': self.warehouse.id,
+            'product_id': product.id, 'vendor_id': self.real_vendor.id,
+            'suggested_reorder_qty': 1.0, 'effective_unit_cost': 2.0,
+            'urgency': 'critical', 'qty_on_hand': -1.0, 'reorder_needed': True,
+            'stock_correction_candidate': True,
+        })
+        docs = (self.sug_ok | sug)
+        html, _ = self.env['ir.actions.report']._render_qweb_html(
+            'smart_reorder_advisor.action_report_boss_weekly_order', docs.ids,
+        )
+        html = html.decode('utf-8')
+        self.assertIn('Needs Attention', html)
+        self.assertIn('Boss Report Stock Correction Widget', html)
+        self.assertIn('likely a data/count error', html)
+        # Real Spare Parts Co.'s subtotal must only reflect sug_ok (50.00) —
+        # the stock-correction item must not be summed into its vendor block
+        # even though it shares the same vendor. If it were wrongly included,
+        # the subtotal would be 52.00 (50.00 + 1 unit * 2.00) instead.
+        self.assertIn('50.00', html)
+        self.assertNotIn('52.00', html)
+
+    def test_stock_correction_summary_line_shows_count(self):
+        product = self.env['product.product'].create({
+            'name': 'Boss Report Stock Correction Count Widget', 'type': 'product',
+        })
+        sug = self.Suggestion.create({
+            'company_id': self.company.id, 'warehouse_id': self.warehouse.id,
+            'product_id': product.id, 'vendor_id': self.real_vendor.id,
+            'suggested_reorder_qty': 1.0, 'urgency': 'critical',
+            'qty_on_hand': -1.0, 'reorder_needed': True,
+            'stock_correction_candidate': True,
+        })
+        docs = (self.sug_ok | sug)
+        html, _ = self.env['ir.actions.report']._render_qweb_html(
+            'smart_reorder_advisor.action_report_boss_weekly_order', docs.ids,
+        )
+        html = html.decode('utf-8')
+        self.assertIn('1 product', html)
+        self.assertIn('may need an inventory adjustment instead of a reorder', html)
+
+    def test_stock_correction_summary_line_absent_when_none_flagged(self):
+        html = self._render()
+        self.assertNotIn('may need an inventory adjustment instead of a reorder', html)
+
 
 @tagged('post_install', '-at_install')
 class TestDataCleanupTriageFlags(TransactionCase):

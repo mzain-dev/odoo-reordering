@@ -512,8 +512,10 @@
                     <t t-set="review_docs" t-value="actionable_docs.filtered(
                         lambda d: not d.vendor_id
                                   or d.vendor_id.id in temp_vendor_ids
+                                  or d.stock_correction_candidate
                                   or (d.is_dead_stock and d.urgency == 'critical')
                     )"/>
+                    <t t-set="stock_correction_count" t-value="len(docs.filtered(lambda d: d.stock_correction_candidate))"/>
                     <t t-set="report_docs" t-value="actionable_docs - review_docs"/>
                     <t t-set="vendors" t-value="report_docs.mapped('vendor_id').sorted(key=lambda v: v.name or '')"/>
                     <t t-set="currency_sym" t-value="report_docs[0].currency_id.symbol if report_docs else (docs[0].currency_id.symbol if docs else '')"/>
@@ -535,6 +537,12 @@
                             <t t-esc="datetime.date.today()"/> |
                             Grand Total: <strong><t t-esc="currency_sym"/> <t t-esc="'%.2f' % grand_total"/></strong>
                         </p>
+                        <t t-if="stock_correction_count">
+                            <p style="margin:4px 0; color:#e67e22; font-weight:bold;">
+                                ⚠️ <t t-esc="stock_correction_count"/> product<t t-if="stock_correction_count != 1">s</t>
+                                may need an inventory adjustment instead of a reorder — see "Needs Attention" below.
+                            </p>
+                        </t>
                     </div>
 
                     <t t-if="not vendors">
@@ -611,7 +619,8 @@
                                         <td><t t-esc="item.product_id.name"/></td>
                                         <td align="right"><t t-esc="'%.0f' % item.suggested_reorder_qty"/></td>
                                         <td>
-                                            <t t-if="not item.vendor_id">No vendor assigned</t>
+                                            <t t-if="item.stock_correction_candidate">Negative stock with no real sales history — likely a data/count error, not a genuine reorder</t>
+                                            <t t-elif="not item.vendor_id">No vendor assigned</t>
                                             <t t-elif="item.vendor_id.id in temp_vendor_ids">Temporary/placeholder vendor — assign a real vendor</t>
                                             <t t-else="">Dead stock with negative balance — verify before reordering</t>
                                         </td>
