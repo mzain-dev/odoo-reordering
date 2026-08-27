@@ -120,6 +120,10 @@
                 <field name="needs_review_reason" string="Review Reason" optional="hide"/>
                 <field name="needs_vendor_assignment" string="👤 Needs Vendor?" optional="hide"/>
                 <field name="dead_stock_critical_review" string="☠️ Dead+Critical?" optional="hide"/>
+                <field name="stock_correction_candidate" string="🔧 Stock Correction?" optional="hide"/>
+                <field name="suggested_resolution" string="Suggested Resolution" optional="hide" widget="badge"
+                       decoration-warning="suggested_resolution == 'stock_correction'"
+                       decoration-info="suggested_resolution == 'reorder'"/>
 
                 <field name="reorder_needed"   column_invisible="True"/>
                 <field name="urgency_rank"     column_invisible="True"/>
@@ -791,12 +795,17 @@
         <field name="view_mode">kanban,tree,form</field>
         <field name="search_view_id" ref="view_smart_reorder_suggestion_search"/>
         <field name="context">{'search_default_reorder_needed': 1}</field>
+        <field name="view_ids" eval="[(5, 0, 0),
+            (0, 0, {'view_mode': 'kanban', 'view_id': ref('view_smart_reorder_suggestion_kanban')}),
+            (0, 0, {'view_mode': 'tree', 'view_id': ref('view_smart_reorder_suggestion_list')}),
+            (0, 0, {'view_mode': 'form', 'view_id': ref('view_smart_reorder_suggestion_form')})]"/>
     </record>
 
     <record id="action_smart_reorder_all" model="ir.actions.act_window">
         <field name="name">All Products Analysis</field>
         <field name="res_model">smart.reorder.suggestion</field>
         <field name="view_mode">tree,form</field>
+        <field name="view_id" ref="view_smart_reorder_suggestion_list"/>
         <field name="search_view_id" ref="view_smart_reorder_suggestion_search"/>
     </record>
 
@@ -804,6 +813,7 @@
         <field name="name">🔴 Critical — Negative Stock</field>
         <field name="res_model">smart.reorder.suggestion</field>
         <field name="view_mode">tree,form</field>
+        <field name="view_id" ref="view_smart_reorder_suggestion_list"/>
         <field name="domain">[('urgency','=','critical')]</field>
         <field name="search_view_id" ref="view_smart_reorder_suggestion_search"/>
     </record>
@@ -812,6 +822,7 @@
         <field name="name">💀 Dead Stock</field>
         <field name="res_model">smart.reorder.suggestion</field>
         <field name="view_mode">tree,form</field>
+        <field name="view_id" ref="view_smart_reorder_suggestion_list"/>
         <field name="domain">[('is_dead_stock','=',True)]</field>
         <field name="search_view_id" ref="view_smart_reorder_suggestion_search"/>
     </record>
@@ -820,6 +831,7 @@
         <field name="name">🔎 Needs Review</field>
         <field name="res_model">smart.reorder.suggestion</field>
         <field name="view_mode">tree,form</field>
+        <field name="view_id" ref="view_smart_reorder_suggestion_list"/>
         <field name="domain">[('needs_review','=',True)]</field>
         <field name="search_view_id" ref="view_smart_reorder_suggestion_search"/>
     </record>
@@ -828,6 +840,7 @@
         <field name="name">💰 Within Budget</field>
         <field name="res_model">smart.reorder.suggestion</field>
         <field name="view_mode">tree,form</field>
+        <field name="view_id" ref="view_smart_reorder_suggestion_list"/>
         <field name="domain">[('within_budget','=',True),('reorder_needed','=',True)]</field>
         <field name="context">{'search_default_within_budget': 1}</field>
         <field name="search_view_id" ref="view_smart_reorder_suggestion_search"/>
@@ -838,6 +851,7 @@
         <field name="name">👤 Needs Vendor Assignment</field>
         <field name="res_model">smart.reorder.suggestion</field>
         <field name="view_mode">tree,form</field>
+        <field name="view_id" ref="view_smart_reorder_suggestion_list"/>
         <field name="domain">[('needs_vendor_assignment','=',True)]</field>
         <field name="search_view_id" ref="view_smart_reorder_suggestion_search"/>
         <field name="help">
@@ -851,6 +865,7 @@
         <field name="name">☠️ Dead Stock + Critical — Needs Review</field>
         <field name="res_model">smart.reorder.suggestion</field>
         <field name="view_mode">tree,form</field>
+        <field name="view_id" ref="view_smart_reorder_suggestion_list"/>
         <field name="domain">[('dead_stock_critical_review','=',True)]</field>
         <field name="search_view_id" ref="view_smart_reorder_suggestion_search"/>
         <field name="help">
