@@ -4454,6 +4454,153 @@ class TestDataCleanupTriageFlags(TransactionCase):
             ).create({'vendor_id': new_vendor.id})
             wizard.action_assign_vendor()
 
+    def test_stock_correction_candidate_true_when_never_sold(self):
+        # Negative stock, zero demand, and no sales history whatsoever — the
+        # exact gap in is_dead this flag was built to close.
+        product = self.env['product.product'].create({
+            'name': 'Correction Never Sold Widget', 'type': 'product', 'standard_price': 1.0,
+        })
+        self._set_quant(product, -1.0)
+        self._generate()
+        suggestion = self.env['smart.reorder.suggestion'].search([
+            ('product_id', '=', product.id), ('warehouse_id', '=', self.warehouse.id),
+        ])
+        self.assertTrue(suggestion)
+        self.assertFalse(suggestion.last_sale_date, 'this product has never sold at all')
+        self.assertTrue(suggestion.stock_correction_candidate)
+        self.assertEqual(suggestion.suggested_resolution, 'stock_correction')
+
+    def test_stock_correction_candidate_true_when_sold_long_ago(self):
+        product = self.env['product.product'].create({
+            'name': 'Correction Old Sale Widget', 'type': 'product', 'standard_price': 1.0,
+        })
+        partner = self.env['res.partner'].create({'name': 'Correction Old Sale Customer'})
+        old_date = fields.Date.today() - relativedelta(months=8)
+        order = self.env['sale.order'].create({
+            'partner_id': partner.id,
+            'company_id': self.company.id,
+            'warehouse_id': self.warehouse.id,
+            'date_order': datetime.combine(old_date, datetime.min.time()),
+            'order_line': [(0, 0, {
+                'product_id': product.id, 'product_uom_qty': 5.0, 'price_unit': 10.0,
+            })],
+        })
+        order.action_confirm()
+        order.order_line.qty_delivered = 5.0
+
+        self._set_quant(product, -1.0)  # negative now, nothing recent
+        self._generate()
+        suggestion = self.env['smart.reorder.suggestion'].search([
+            ('product_id', '=', product.id), ('warehouse_id', '=', self.warehouse.id),
+        ])
+        self.assertTrue(suggestion)
+        self.assertTrue(suggestion.stock_correction_candidate)
+        self.assertEqual(suggestion.suggested_resolution, 'stock_correction')
+
+    def test_stock_correction_candidate_false_with_real_demand(self):
+        # Negative stock, but genuine ongoing demand behind it — a real
+        # shortfall, not a data error, must never be mislabeled either way.
+        product = self.env['product.product'].create({
+            'name': 'Correction Real Demand Widget', 'type': 'product', 'standard_price': 1.0,
+        })
+        partner = self.env['res.partner'].create({'name': 'Correction Real Demand Customer'})
+        recent_date = fields.Date.today() - relativedelta(days=10)
+        order = self.env['sale.order'].create({
+            'partner_id': partner.id,
+            'company_id': self.company.id,
+            'warehouse_id': self.warehouse.id,
+            'date_order': datetime.combine(recent_date, datetime.min.time()),
+            'order_line': [(0, 0, {
+                'product_id': product.id, 'product_uom_qty': 20.0, 'price_unit': 10.0,
+            })],
+        })
+        order.action_confirm()
+        order.order_line.qty_delivered = 20.0
+
+        self._set_quant(product, -1.0)
+        self._generate()
+        suggestion = self.env['smart.reorder.suggestion'].search([
+            ('product_id', '=', product.id), ('warehouse_id', '=', self.warehouse.id),
+        ])
+        self.assertTrue(suggestion)
+        self.assertGreater(suggestion.avg_monthly_demand, 0.0)
+        self.assertFalse(suggestion.stock_correction_candidate)
+        self.assertEqual(suggestion.suggested_resolution, 'reorder')
+
+    def test_suggested_resolution_blank_when_stock_is_positive(self):
+        product = self.env['product.product'].create({
+            'name': 'Correction Positive Stock Widget', 'type': 'product', 'standard_price': 1.0,
+        })
+        self._set_quant(product, 5.0)
+        self._generate()
+        suggestion = self.env['smart.reorder.suggestion'].search([
+            ('product_id', '=', product.id), ('warehouse_id', '=', self.warehouse.id),
+        ])
+        self.assertTrue(suggestion)
+        self.assertFalse(suggestion.stock_correction_candidate)
+        self.assertFalse(suggestion.suggested_resolution)
+
+    def test_monthly_sales_history_format_oldest_to_newest(self):
+        product = self.env['product.product'].create({
+            'name': 'Correction History Widget', 'type': 'product', 'standard_price': 1.0,
+        })
+        partner = self.env['res.partner'].create({'name': 'Correction History Customer'})
+        self.config.write({'analysis_period': '6'})
+        # month_starts[0] is the most recent month; sell 5 units 2 months ago.
+        month_starts = []
+        cursor = fields.Date.today().replace(day=1)
+        for _i in range(6):
+            month_starts.append(cursor)
+            cursor = cursor - relativedelta(months=1)
+        target_month = month_starts[2]
+        order = self.env['sale.order'].create({
+            'partner_id': partner.id,
+            'company_id': self.company.id,
+            'warehouse_id': self.warehouse.id,
+            'date_order': datetime.combine(target_month + timedelta(days=4), datetime.min.time()),
+            'order_line': [(0, 0, {
+                'product_id': product.id, 'product_uom_qty': 5.0, 'price_unit': 10.0,
+            })],
+        })
+        order.action_confirm()
+        order.order_line.qty_delivered = 5.0
+
+        self._set_quant(product, 10.0)
+        self._generate()
+        suggestion = self.env['smart.reorder.suggestion'].search([
+            ('product_id', '=', product.id), ('warehouse_id', '=', self.warehouse.id),
+        ])
+        self.assertTrue(suggestion)
+        values = suggestion.monthly_sales_history.split(',')
+        self.assertEqual(len(values), 6)
+        # Oldest-to-newest: the 5-unit month was 2 months back from the most
+        # recent, i.e. index 3 counting from the oldest end (5 total - 1 - 2).
+        self.assertEqual(values[3], '5')
+        self.assertEqual(values.count('0'), 5)
+
+    def test_open_inventory_adjustment_is_pure_navigation(self):
+        product = self.env['product.product'].create({
+            'name': 'Correction Nav Button Widget', 'type': 'product', 'standard_price': 1.0,
+        })
+        self._set_quant(product, -1.0)
+        self._generate()
+        suggestion = self.env['smart.reorder.suggestion'].search([
+            ('product_id', '=', product.id), ('warehouse_id', '=', self.warehouse.id),
+        ])
+        quant_count_before = self.env['stock.quant'].search_count([])
+        move_count_before = self.env['stock.move'].search_count([])
+
+        action = suggestion.action_open_inventory_adjustment()
+
+        self.assertEqual(self.env['stock.quant'].search_count([]), quant_count_before,
+                          'must never create/modify a quant')
+        self.assertEqual(self.env['stock.move'].search_count([]), move_count_before,
+                          'must never create a stock move')
+        self.assertEqual(action['res_model'], 'stock.quant')
+        self.assertEqual(action['type'], 'ir.actions.act_window')
+        self.assertIn(('product_id', '=', product.id), action['domain'])
+        self.assertTrue(action['context'].get('inventory_mode'))
+
 
 @tagged('post_install', '-at_install')
 class TestActionCenter(TransactionCase):

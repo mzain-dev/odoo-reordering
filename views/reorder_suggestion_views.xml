@@ -187,6 +187,11 @@
                             string="📦 Stock Moves"
                             type="object"
                             class="btn-secondary"/>
+                    <button name="action_open_inventory_adjustment"
+                            string="🔧 Open Inventory Adjustment"
+                            type="object"
+                            class="btn-secondary"
+                            invisible="not stock_correction_candidate"/>
                     <button name="action_mark_one_time_order"
                             string="❌ This Was a One-Time Order"
                             type="object"
@@ -207,6 +212,7 @@
                     <field name="is_provisional" invisible="1"/>
                     <field name="is_marked_ordered" invisible="1"/>
                     <field name="is_draft_po_stale" invisible="1"/>
+                    <field name="stock_correction_candidate" invisible="1"/>
                     <div class="oe_title">
                         <div class="o_row" style="gap:8px; flex-wrap:wrap;">
                             <field name="urgency" widget="badge"
@@ -292,6 +298,20 @@
                         No sales for <field name="months_since_last_sale" readonly="1"/> months.
                         Last sale: <field name="last_sale_date" readonly="1"/>.
                         Consider liquidating or returning to vendor.
+                    </div>
+
+                    <div class="alert alert-secondary" role="alert"
+                         invisible="not stock_correction_candidate">
+                        🔧 <strong>LIKELY DATA ERROR, NOT A REAL SHORTFALL.</strong>
+                        On hand is negative but there's no real demand behind it
+                        (never sold, or not sold in longer than the Dead Stock
+                        Threshold) — this looks more like a data/timing issue
+                        (e.g. a delayed purchase receipt) than something worth
+                        ordering more of. Monthly sales, oldest → newest:
+                        <field name="monthly_sales_history" readonly="1" nolabel="1" class="oe_inline fw-bold"/>.
+                        This module never adjusts stock itself — use the
+                        "🔧 Open Inventory Adjustment" button above to review and
+                        correct it in Odoo's own screen if that's the right call.
                     </div>
 
                     <div class="alert alert-info" role="alert"
@@ -839,6 +859,51 @@
             something that hasn't sold in months. Needs a human look before
             trusting the number: a real stock correction, a genuine reorder,
             or Snooze once resolved.
+        </field>
+    </record>
+
+    <!-- ── Stock Correction Candidates (Recommendation) ──
+         Purely a read/display list — the module never writes to stock.quant.
+         "Open Inventory Adjustment" on each row hands off to Odoo's own
+         native screen for the actual correction. -->
+    <record id="view_smart_reorder_stock_correction_list" model="ir.ui.view">
+        <field name="name">smart.reorder.suggestion.stock.correction.tree</field>
+        <field name="model">smart.reorder.suggestion</field>
+        <field name="arch" type="xml">
+            <tree string="Stock Correction Candidates"
+                  default_order="last_sale_date asc"
+                  create="false" edit="false" delete="false">
+                <field name="warehouse_id"/>
+                <field name="default_code" string="Part No."/>
+                <field name="product_id"/>
+                <field name="qty_on_hand" string="On Hand"
+                       decoration-danger="qty_on_hand &lt; 0"/>
+                <field name="last_sale_date"/>
+                <field name="months_since_last_sale" string="Mo. No Sale"/>
+                <field name="monthly_sales_history" string="Monthly History (oldest → newest)"/>
+                <field name="suggested_resolution" widget="badge"
+                       decoration-warning="suggested_resolution == 'stock_correction'"
+                       decoration-info="suggested_resolution == 'reorder'"/>
+            </tree>
+        </field>
+    </record>
+
+    <record id="action_smart_reorder_stock_correction" model="ir.actions.act_window">
+        <field name="name">🔧 Stock Correction Candidates</field>
+        <field name="res_model">smart.reorder.suggestion</field>
+        <field name="view_mode">tree,form</field>
+        <field name="domain">[('stock_correction_candidate','=',True)]</field>
+        <field name="search_view_id" ref="view_smart_reorder_suggestion_search"/>
+        <field name="view_ids" eval="[(5, 0, 0),
+            (0, 0, {'view_mode': 'tree', 'view_id': ref('view_smart_reorder_stock_correction_list')}),
+            (0, 0, {'view_mode': 'form', 'view_id': ref('view_smart_reorder_suggestion_form')})]"/>
+        <field name="help">
+            Negative stock with no real demand behind it — likely a data or
+            timing error (e.g. a delayed purchase receipt), not a genuine
+            reorder need. This list is read-only; nothing here writes to
+            stock. Sorted oldest-last-sale-first. Use "Open Inventory
+            Adjustment" on a row to review and correct it in Odoo's own
+            screen if that's the right call.
         </field>
     </record>
 

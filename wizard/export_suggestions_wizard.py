@@ -77,6 +77,7 @@ EXPORT_HEADERS = [
 # Task 9: "Essential (Working List)" — the small column set a buyer actually
 # works from day to day, as opposed to the full technical breakdown above.
 ESSENTIAL_HEADERS = [
+    'Part Number',
     'Product Name/Description',
     'Warehouse',
     'On Hand Qty',

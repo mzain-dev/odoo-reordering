@@ -496,6 +496,25 @@ def calculate_product_suggestion(
     needs_vendor_assignment = bool(reorder_needed) and (not v_partner_id or v_partner_id in temp_vendor_ids_set)
     dead_stock_critical_review = bool(is_dead and urgency == 'critical')
 
+    # Stock Correction Candidate (Recommendation): closes a real gap in the
+    # dead-stock check above — is_dead requires qty_on_hand > 0 when there's
+    # no last_sale at all, so a product that has NEVER sold and is negative
+    # was never flagged as dead, even though that's precisely the pattern
+    # most likely to be a data/timing error (e.g. a delayed purchase receipt)
+    # rather than genuine demand. Deliberately independent of is_dead/urgency
+    # so it also catches products with zero sales history whatsoever.
+    stock_correction_candidate = bool(
+        qty_on_hand < 0
+        and avg_monthly == 0.0
+        and (not last_sale or months_since >= config_data['dead_stock_months'])
+    )
+    if qty_on_hand < 0 and stock_correction_candidate:
+        suggested_resolution = 'stock_correction'
+    elif qty_on_hand < 0:
+        suggested_resolution = 'reorder'
+    else:
+        suggested_resolution = False
+
     # Inter-Warehouse Rebalancing (Phase 4)
     transfer_source_wh_id = False
     transfer_source_wh_name = False
@@ -570,6 +589,12 @@ def calculate_product_suggestion(
         for month_start, qty, was_excluded
         in zip(dates['month_starts'], monthly_series, excluded_flags)
     )
+
+    # Compact monthly history (Recommendation): same data as the breakdown
+    # above, but as a scannable "0,0,3,0,7,6" string instead of a paragraph —
+    # oldest to newest, left to right, so a trend is readable at a glance
+    # across a whole list of products instead of opening each one's notes.
+    monthly_sales_history = ','.join(f'{qty:.0f}' for qty in reversed(monthly_series))
 
     confidence, confidence_note = compute_confidence_score(
         monthly_series, excluded_months, reorder_behavior
@@ -725,6 +750,9 @@ def calculate_product_suggestion(
         'price_discrepancy_pct':    price_discrepancy_pct,
         'needs_vendor_assignment':  needs_vendor_assignment,
         'dead_stock_critical_review': dead_stock_critical_review,
+        'stock_correction_candidate': stock_correction_candidate,
+        'suggested_resolution':     suggested_resolution,
+        'monthly_sales_history':    monthly_sales_history,
         'alt_vendor_id':            alt_vendor_id_val,
         'alt_vendor_lead_days':     alt_vendor_lead_days_val,
         'transfer_source_warehouse_id': transfer_source_wh_id,

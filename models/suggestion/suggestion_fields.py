@@ -332,6 +332,34 @@ class SmartReorderSuggestion(models.Model):
              'flag. Feeds the "Dead Stock — Needs Review" triage list.'
     )
 
+    # ── Stock Correction Candidate (Recommendation) ──────────────────────────
+    # Purely computed and displayed — this module never writes to stock.quant
+    # or any inventory record. Closes a gap in is_dead: a product that has
+    # NEVER sold (no last_sale at all) and is negative was never flagged dead
+    # before, even though that's the pattern most likely to be a data/timing
+    # error (e.g. a delayed purchase receipt) rather than genuine demand.
+    stock_correction_candidate = fields.Boolean(
+        string='Stock Correction Candidate?', readonly=True, index=True,
+        help='True when stock is negative, there is no real forecasted demand '
+             'behind it, and the product has never sold (or not sold in longer '
+             'than the Dead Stock Threshold). Likely a data/timing error — e.g. '
+             'a delayed purchase receipt — rather than genuine demand worth '
+             'reordering for. A judgment call for a human, not an automatic action.'
+    )
+    suggested_resolution = fields.Selection([
+        ('reorder', 'Genuine Shortfall — Reorder'),
+        ('stock_correction', 'Likely Data Error — Consider Adjustment'),
+    ], string='Suggested Resolution', readonly=True,
+       help='Only set when on-hand is negative. Plain-language read of '
+            'stock_correction_candidate for the triage list.')
+    monthly_sales_history = fields.Char(
+        string='Monthly Sales History', readonly=True,
+        help='Comma-separated units sold per month, oldest to newest (e.g. '
+             '"0,0,3,0,7,6"), over the current Sales Analysis Period. Same '
+             'underlying data as the Calculation Breakdown\'s per-month '
+             'listing, in a compact form for scanning across many rows.'
+    )
+
     alt_vendor_id          = fields.Many2one('res.partner', string='Fastest Alternative Vendor', readonly=True)
     alt_vendor_lead_days   = fields.Integer(string='Alt. Vendor Lead (Days)', readonly=True)
 

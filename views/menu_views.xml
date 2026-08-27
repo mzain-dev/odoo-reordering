@@ -63,6 +63,11 @@
               parent="menu_smart_reorder_suggestions"
               action="action_smart_reorder_dead_stock_critical_review"
               sequence="8"/>
+    <menuitem id="menu_smart_reorder_stock_correction"
+              name="Stock Correction Candidates"
+              parent="menu_smart_reorder_suggestions"
+              action="action_smart_reorder_stock_correction"
+              sequence="9"/>
 
     <!-- Generate wizard -->
     <menuitem id="menu_smart_reorder_generate"

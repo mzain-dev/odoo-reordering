@@ -516,6 +516,31 @@ class SmartReorderSuggestion(models.Model):
             ],
         }
 
+    def action_open_inventory_adjustment(self):
+        """Recommendation: pure navigation, same family as action_open_product /
+        action_open_stock_moves above — this module never writes to stock.quant
+        or any inventory record, here or anywhere else. This just opens Odoo's
+        own native stock-count screen for this product/warehouse; the actual
+        correction (if any) happens entirely in Odoo's own standard tool,
+        triggered by the person reviewing it, not by this module."""
+        self.ensure_one()
+        return {
+            'type': 'ir.actions.act_window',
+            'name': _('Inventory Adjustment — %s') % self.product_id.display_name,
+            'res_model': 'stock.quant',
+            'view_mode': 'list',
+            'domain': [
+                ('product_id', '=', self.product_id.id),
+                ('location_id', 'child_of', self.warehouse_id.lot_stock_id.id),
+            ],
+            'context': {
+                'inventory_mode': True,
+                'search_default_internal_loc': 1,
+                'default_product_id': self.product_id.id,
+            },
+            'target': 'current',
+        }
+
     def action_mark_one_time_order(self):
         self.ensure_one()
         if not self.env.user.has_group('smart_reorder_advisor.group_smart_reorder_manager'):
