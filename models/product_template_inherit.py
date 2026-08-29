@@ -98,3 +98,21 @@ class ProductTemplate(models.Model):
             'domain': [('product_id.product_tmpl_id', '=', self.id)],
             'target': 'current',
         }
+
+
+class ProductProduct(models.Model):
+    """Odoo 17 reuses product.template's button-box layout (added via
+    stock.view_template_property_form) for the Product Variant form too, so
+    these stat buttons render there as well — but a type="object" button call
+    resolves against the record's actual model (product.product), and _inherits
+    delegation only proxies fields, never action methods. Without these, clicking
+    either button from a Product Variant record raises AttributeError. Delegating
+    to the template keeps the count shown and the list opened consistent (the
+    stat button's count field is template-wide either way, via delegation)."""
+    _inherit = 'product.product'
+
+    def action_view_predecessors(self):
+        return self.product_tmpl_id.action_view_predecessors()
+
+    def action_view_reorder_suggestions(self):
+        return self.product_tmpl_id.action_view_reorder_suggestions()
