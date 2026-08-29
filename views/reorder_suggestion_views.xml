@@ -748,6 +748,22 @@
                   create="false" edit="false" delete="false"
                   decoration-danger="urgency == 'critical'"
                   decoration-warning="urgency == 'urgent'">
+
+                <header>
+                    <button name="%(action_export_suggestions_wizard)d"
+                            string="📊 Export to Excel"
+                            type="action"
+                            class="btn-secondary"/>
+                    <button name="action_snooze"
+                            string="💤 Bulk Snooze"
+                            type="object"
+                            class="btn-secondary"/>
+                    <button name="action_bulk_mark_ordered"
+                            string="✅ Mark Selected as Ordered"
+                            type="object"
+                            class="btn-secondary"/>
+                </header>
+
                 <field name="urgency" widget="badge"
                        decoration-danger="urgency == 'critical'"
                        decoration-warning="urgency == 'urgent'"
