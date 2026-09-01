@@ -2914,7 +2914,7 @@ class TestExportSuggestionsWizard(TransactionCase):
         self.assertEqual(header_row, [
             'Part Number', 'Product Name/Description', 'Warehouse', 'On Hand Qty',
             'Suggested Reorder Qty', 'Vendor', 'Unit Cost', 'Reorder Value',
-            'Dead Stock?', 'Last Sale Date',
+            'Dead Stock?', 'Last Sale Date', 'Suggested Resolution',
         ])
         self.assertEqual(ws.max_row, 3, 'header + 2 data rows')
 
@@ -2931,6 +2931,25 @@ class TestExportSuggestionsWizard(TransactionCase):
         self.assertEqual(row_a[7], 20.0)
         self.assertEqual(row_a[8], 'No')
         self.assertEqual(row_a[9], self.sugg_a.last_sale_date)
+        self.assertEqual(row_a[10], '', 'no suggested_resolution set on this fixture — blank, not False/None')
+
+    def test_export_essential_shows_suggested_resolution_label(self):
+        self.sugg_a.write({'suggested_resolution': 'stock_correction'})
+        self.sugg_b.write({'suggested_resolution': 'reorder'})
+        wizard = self.Wizard.with_context(
+            active_domain=[('id', 'in', [self.sugg_a.id, self.sugg_b.id])]
+        ).create({})
+        action = wizard.action_export()
+        attachment_id = int(action['url'].split('/web/content/')[1].split('?')[0])
+        attachment = self.env['ir.attachment'].browse(attachment_id)
+
+        wb = load_workbook(io.BytesIO(base64.b64decode(attachment.datas)))
+        ws = wb.active
+        data_rows = list(ws.iter_rows(min_row=2, max_row=3, values_only=True))
+        row_a = next(row for row in data_rows if row[1] == 'Export Widget A')
+        row_b = next(row for row in data_rows if row[1] == 'Export Widget B')
+        self.assertEqual(row_a[10], 'Likely Data Error — Consider Adjustment')
+        self.assertEqual(row_b[10], 'Genuine Shortfall — Reorder')
 
     def test_export_full_produces_all_columns(self):
         wizard = self.Wizard.with_context(

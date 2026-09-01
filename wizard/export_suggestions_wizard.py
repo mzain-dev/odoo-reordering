@@ -24,6 +24,10 @@ PATTERN_LABELS = {
     'one_time_big_order': 'One-Time Big Order Only',
     'new': 'New — No Sales History',
 }
+RESOLUTION_LABELS = {
+    'reorder': 'Genuine Shortfall — Reorder',
+    'stock_correction': 'Likely Data Error — Consider Adjustment',
+}
 
 EXPORT_HEADERS = [
     'Budget Rank',
@@ -87,6 +91,7 @@ ESSENTIAL_HEADERS = [
     'Reorder Value',
     'Dead Stock?',
     'Last Sale Date',
+    'Suggested Resolution',
 ]
 
 
@@ -224,6 +229,7 @@ class ExportSuggestionsWizard(models.TransientModel):
             ws.cell(row=row, column=8, value=rec.reorder_value if can_see_cost else redacted)
             ws.cell(row=row, column=9, value='Yes' if rec.is_dead_stock else 'No')
             ws.cell(row=row, column=10, value=rec.last_sale_date or None)
+            ws.cell(row=row, column=11, value=RESOLUTION_LABELS.get(rec.suggested_resolution, ''))
 
         return self._finalize_sheet(wb, ws, ESSENTIAL_HEADERS)
 
